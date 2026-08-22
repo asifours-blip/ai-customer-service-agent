@@ -60,4 +60,8 @@ def chat(
         sources=[dict(s) for s in result["sources"]],
         tool_calls=result["tool_calls"],
         trace_id=result["trace_id"],
+        route=str(result.get("route", "")),
+        intent=result.get("intent"),
+        abstained=bool(result.get("abstained")),
+        latency_ms=int(result.get("latency_ms", 0)),
     )

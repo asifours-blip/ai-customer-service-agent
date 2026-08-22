@@ -129,3 +129,8 @@ class ChatResponse(BaseModel):
     sources: list[dict[str, str]] = []
     tool_calls: list[dict[str, object]] = []
     trace_id: str
+    # Trace 面板数据（Phase 6）
+    route: str = ""
+    intent: str | None = None
+    abstained: bool = False
+    latency_ms: int = 0

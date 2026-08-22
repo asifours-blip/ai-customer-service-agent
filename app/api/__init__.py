@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api import auth, chat, conversations, orders, support, tickets
+from app.api import auth, chat, conversations, orders, support, tickets, traces
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -11,3 +11,4 @@ api_router.include_router(conversations.router, prefix="/conversations", tags=["
 api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
 api_router.include_router(tickets.router, prefix="/tickets", tags=["tickets"])
 api_router.include_router(support.router, prefix="/support", tags=["support"])
+api_router.include_router(traces.router, prefix="/traces", tags=["traces"])

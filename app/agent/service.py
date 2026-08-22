@@ -67,6 +67,8 @@ class AgentService:
         except Exception as exc:  # 图内异常兜底：不向用户暴露内部细节
             error_type = type(exc).__name__
             final_state = {**initial, "final_answer": "抱歉，系统内部出现异常，请稍后重试或转人工客服。"}
+        # guardrail 等节点标记的 error_type（如 INJECTION_FLAGGED:*）也写入 trace
+        error_type = error_type or final_state.get("error_type")
         latency_ms = int((utcnow() - started).total_seconds() * 1000)
 
         answer = str(final_state.get("final_answer", ""))
