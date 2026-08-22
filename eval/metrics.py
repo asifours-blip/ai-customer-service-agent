@@ -106,7 +106,15 @@ def rag_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
 def system_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     latencies = [t["latency_ms"] for r in results for t in r["turns"]]
     turns = [t for r in results for t in r["turns"]]
-    errors = sum(1 for t in turns if t.get("error_type"))
+    # 安全拦截（INJECTION_FLAGGED）是注入用例的期望结果，不计入系统错误
+    guardrail_blocked = sum(
+        1 for t in turns if str(t.get("error_type") or "").startswith("INJECTION_FLAGGED")
+    )
+    errors = sum(
+        1
+        for t in turns
+        if t.get("error_type") and not str(t["error_type"]).startswith("INJECTION_FLAGGED")
+    )
     total_calls = len(turns)
     return {
         "turns": total_calls,
@@ -116,7 +124,11 @@ def system_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
             "mean": round(sum(latencies) / len(latencies)) if latencies else 0,
         },
         "error_rate": _rate(errors, total_calls),
-        "note": "latency 为端到端应用层耗时（含图编排与 DB），非纯 LLM 延迟；离线模式无网络调用",
+        "guardrail_blocked": guardrail_blocked,
+        "note": (
+            "latency 为端到端应用层耗时（含图编排与 DB），非纯 LLM 延迟；"
+            "error_rate 不含安全拦截（guardrail_blocked 单列，拦截是注入用例的期望结果）"
+        ),
     }
 
 

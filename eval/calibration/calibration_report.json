@@ -1,0 +1,45 @@
+{
+  "n": 24,
+  "agreement": 0.9167,
+  "cohen_kappa": 0.3143,
+  "weighted_kappa": 0.6471,
+  "confusion_matrix": [
+    [
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      22
+    ]
+  ],
+  "disagreements": [
+    {
+      "case_id": "mt_001",
+      "human_score": 2,
+      "judge_score": 1,
+      "judge_reason": "正确给出物流状态和位置，但未提及签收时间（3天前），对'什么时候到'的回答不完整。",
+      "difference": 1
+    },
+    {
+      "case_id": "mt_003",
+      "human_score": 0,
+      "judge_score": 1,
+      "judge_reason": "系统给出了保修期限规则，但未利用订单信息直接判断A10001是否在保修期内，遗漏关键结论，部分正确。",
+      "difference": -1
+    }
+  ],
+  "targets": {
+    "agreement_min": 0.85,
+    "kappa_min": 0.7
+  },
+  "judge_publishable": false,
+  "verdict": "FAIL：κ 或 Agreement 未达标，须迭代 judge prompt 后重校准"
+}

@@ -104,6 +104,8 @@ def run_case(agent: AgentService, db: Session, case: dict[str, Any]) -> dict[str
                 "abstained": bool(r.get("abstained")),
                 "trace_id": r["trace_id"],
                 "latency_ms": r.get("latency_ms", 0),
+                "prompt_tokens": r.get("prompt_tokens", 0) or 0,
+                "completion_tokens": r.get("completion_tokens", 0) or 0,
             }
         )
     final = turn_results[-1]

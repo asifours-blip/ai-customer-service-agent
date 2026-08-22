@@ -29,7 +29,9 @@ class LLMClient(Protocol):
 
     model_name: str
 
-    def complete(self, system: str, user: str, *, max_tokens: int = 1500) -> LLMResponse:
+    def complete(
+        self, system: str, user: str, *, max_tokens: int = 1500, json_mode: bool = False
+    ) -> LLMResponse:
         ...
 
 
@@ -39,8 +41,10 @@ class FakeLLMClient:
     def __init__(self, model_name: str = "fake-llm") -> None:
         self.model_name = model_name
 
-    def complete(self, system: str, user: str, *, max_tokens: int = 1500) -> LLMResponse:
-        _ = system, max_tokens
+    def complete(
+        self, system: str, user: str, *, max_tokens: int = 1500, json_mode: bool = False
+    ) -> LLMResponse:
+        _ = system, max_tokens, json_mode
         content = user if len(user) <= 600 else user[:600] + "…"
         usage = LLMUsage(prompt_tokens=len(user), completion_tokens=len(content), total_tokens=len(user) + len(content))
         return LLMResponse(content=content, model=self.model_name, usage=usage)
