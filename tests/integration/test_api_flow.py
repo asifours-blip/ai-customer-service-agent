@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from tests.integration.conftest import auth_headers, login
+import pytest
+
+from tests.conftest import auth_headers, login
+
+pytestmark = pytest.mark.integration
 
 
 def test_health(client) -> None:

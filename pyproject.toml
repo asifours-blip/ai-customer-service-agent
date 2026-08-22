@@ -45,6 +45,7 @@ include = ["app*"]
 testpaths = ["tests"]
 markers = [
     "integration: 需要 Docker PostgreSQL 的集成测试",
+    "rag: RAG 管线测试（单测部分零依赖，管线部分依赖 integration 环境）",
     "live: 调用真实付费 LLM API 的测试（默认不跑）",
 ]
 

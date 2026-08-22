@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # --- Embedding：fake（CI/离线）| bge（本地 BAAI/bge-small-zh-v1.5）---
     embedding_backend: str = "fake"
     bge_model_name: str = "BAAI/bge-small-zh-v1.5"
+    # 拒答阈值：fake 用停用字过滤后的 bigram 余弦（实测可答≥0.24 / 无关≤0.23，阈值 0.22）
+    # bge 用真实语义余弦，分布不同，单独设阈值
+    retrieval_score_threshold_fake: float = 0.22
+    retrieval_score_threshold_bge: float = 0.35
 
     # --- Cost Guard ---
     max_single_live_eval_cost_usd: float = 1.00  # preflight 预检，--force 可越

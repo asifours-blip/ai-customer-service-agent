@@ -1,0 +1,29 @@
+# 机器可执行的确定性业务规则源（v1.1 补丁：与政策文档通过 policy_version 保持一致）
+# Trace 同时记录 policy_document_version 与 business_rule_version，防止"文档说7天、代码算5天"的漂移
+policy_version: "2026.08"
+rules_version: "1.0"
+
+refund:
+  # 七天无理由退货（政策文档：doc-policy-refund）
+  no_reason_return_within_days: 7
+  # 质量问题退货窗口
+  quality_return_within_days: 15
+  allowed_order_status:
+    - DELIVERED
+  excluded_categories: []  # 本演示域无定制类商品
+
+exchange:
+  within_days: 15
+  allowed_order_status:
+    - DELIVERED
+
+warranty:
+  months: 12
+  battery_months: 6
+  accessory_months: 3
+  allowed_order_status:
+    - DELIVERED
+
+ticket:
+  max_open_per_order_category: 1
+  default_priority: MEDIUM
