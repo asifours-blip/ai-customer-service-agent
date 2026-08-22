@@ -24,8 +24,10 @@ from app.agent.state import AgentState, Route, make_pending, pending_expired
 from app.llm.client import LLMClient
 from app.models.base import utcnow
 from app.rag.answerer import RagService
+from app.security.guardrails import GUARDRAIL_REPLY, detect_injection
 from app.services.eligibility import evaluate_after_sales
 from app.tools import ToolRegistry
+from app.tools.executor import ToolExecutor
 
 MAX_STEPS = 8
 
@@ -48,11 +50,27 @@ def build_agent_graph(
     rag: RagService,
     tools: ToolRegistry,
     classifier: IntentClassifier | None = None,
+    executor: ToolExecutor | None = None,
 ) -> Any:
     """构建编译后的受控 Agent 图。依赖全注入，Fake 可离线全流程测试。"""
     clf = classifier or RuleBasedIntentClassifier()
+    ex = executor or ToolExecutor()
+
+    def run_tool(name: str, db: Session, user_id: str, args: dict[str, Any]) -> Any:
+        return ex.execute(db, tools.require(name), user_id, args)
 
     # ---------- 节点 ----------
+
+    def node_guardrail(state: AgentState) -> dict[str, Any]:
+        """注入检测（软防线）：标记则保守回复；硬防线始终在 Tool 权限层。"""
+        verdict = detect_injection(state["user_query"])
+        if verdict.flagged:
+            return {
+                "route": Route.HUMAN,
+                "final_answer": GUARDRAIL_REPLY,
+                "error_type": "INJECTION_FLAGGED:" + ",".join(verdict.patterns),
+            }
+        return {}
 
     def check_pending(state: AgentState) -> dict[str, Any]:
         pending = state.get("pending_action")
@@ -121,7 +139,7 @@ def build_agent_graph(
 
     def node_order_tool(state: AgentState) -> dict[str, Any]:
         db: Session = state["db"]
-        r = tools.require("query_order").execute(db, state["user_id"], {"order_id": state["entity_order_id"]})
+        r = run_tool("query_order", db, state["user_id"], {"order_id": state["entity_order_id"]})
         call = {"tool": "query_order", "args": {"order_id": state["entity_order_id"]}, "ok": r.success}
         if r.success:
             d = r.data or {}
@@ -142,11 +160,10 @@ def build_agent_graph(
 
     def node_logistics_tool(state: AgentState) -> dict[str, Any]:
         db: Session = state["db"]
-        tool = tools.require("query_logistics")
         order_id = state.get("entity_order_id") or state.get("active_order_id")
         if not order_id:
             return {"route": Route.LOGISTICS_TOOL, "tool_calls": [], "final_answer": "请问要查询哪个订单的物流？"}
-        r = tool.execute(db, state["user_id"], {"order_id": order_id})
+        r = run_tool("query_logistics", db, state["user_id"], {"order_id": order_id})
         call = {"tool": "query_logistics", "args": {"order_id": order_id}, "ok": r.success}
         if r.success:
             d = r.data or {}
@@ -165,7 +182,7 @@ def build_agent_graph(
 
     def node_ticket_tool(state: AgentState) -> dict[str, Any]:
         db: Session = state["db"]
-        r = tools.require("query_ticket").execute(db, state["user_id"], {"ticket_id": state["entity_ticket_id"]})
+        r = run_tool("query_ticket", db, state["user_id"], {"ticket_id": state["entity_ticket_id"]})
         call = {"tool": "query_ticket", "args": {"ticket_id": state["entity_ticket_id"]}, "ok": r.success}
         if r.success:
             d = r.data or {}
@@ -246,7 +263,7 @@ def build_agent_graph(
         if not order_id:
             return {"route": Route.EXECUTE_CONFIRMED, "final_answer": "申请信息已失效，请重新发起售后申请。"}
         # REVALIDATE 1：权限
-        rq = tools.require("query_order").execute(db, state["user_id"], {"order_id": order_id})
+        rq = run_tool("query_order", db, state["user_id"], {"order_id": order_id})
         if not rq.success:
             err_msg = rq.error["message"] if rq.error else "权限校验失败"
             return {"route": Route.EXECUTE_CONFIRMED, "final_answer": f"重新核验未通过：{err_msg}"}
@@ -259,7 +276,8 @@ def build_agent_graph(
             return {"route": Route.EXECUTE_CONFIRMED, "pending_action": None,
                     "final_answer": f"重新核验后订单 {order_id} 已不满足申请条件（{elig.reason_code}），未创建工单。"}
         # 幂等建单：idempotency_key = pending_action_id
-        rc = tools.require("create_ticket").execute(
+        rc = run_tool(
+            "create_ticket",
             db,
             state["user_id"],
             {
@@ -325,6 +343,7 @@ def build_agent_graph(
     # ---------- 装配 ----------
 
     b = StateGraph(AgentState)
+    b.add_node("guardrail", node_guardrail)
     b.add_node("check_pending", check_pending)
     b.add_node("classify", classify)
     b.add_node("resolve_entity", resolve_entity)
@@ -339,7 +358,12 @@ def build_agent_graph(
     b.add_node("human", node_human)
     b.add_node("finalize", node_finalize)
 
-    b.add_edge(START, "check_pending")
+    b.add_edge(START, "guardrail")
+    b.add_conditional_edges(
+        "guardrail",
+        lambda s_: "finalize" if s_.get("error_type", "").startswith("INJECTION_FLAGGED") else "check_pending",
+        {"finalize": "finalize", "check_pending": "check_pending"},
+    )
     b.add_conditional_edges(
         "check_pending",
         lambda s: "finalize" if s.get("confirmation") == "NO" else "classify",
