@@ -66,6 +66,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # B008：FastAPI Depends() 位于默认参数是该框架的官方惯用法
 ignore = ["B008"]
 
+[tool.ruff.lint.per-file-ignores]
+"eval/report.py" = ["E501"]  # 内嵌 HTML/CSS 模板行
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

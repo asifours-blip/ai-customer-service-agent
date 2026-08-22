@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # 拒答阈值：fake 用停用字过滤后的 bigram 余弦（实测可答≥0.24 / 无关≤0.23，阈值 0.22）
     # bge 用真实语义余弦，分布不同，单独设阈值
     retrieval_score_threshold_fake: float = 0.22
-    retrieval_score_threshold_bge: float = 0.35
+    retrieval_score_threshold_bge: float = 0.52
 
     # --- Cost Guard ---
     max_single_live_eval_cost_usd: float = 1.00  # preflight 预检，--force 可越

@@ -12,13 +12,20 @@ from dataclasses import dataclass
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "instruction_override",
-        re.compile(r"(忽略|无视| disregard |不要遵守)(之前|以上|全部|所有)?(的)?(规则|指令|设置|约束|提示)", re.I),
+        re.compile(r"(忽略|无视| disregard |不要遵守)(之前|以上|全部|所有)?的?(规则|指令|设[定置]|约束|提示)", re.I),
     ),
-    ("role_hijack", re.compile(r"你(现在|马上)?(是|扮演|变成)(管理员|开发者|root|admin|超级用户|系统管理员)", re.I)),
+    (
+        "role_hijack",
+        re.compile(
+            r"(你(现在|马上)?(是|扮演|变成)(管理员|开发者|root|admin|超级用户|系统管理员)"
+            r"|(进入|打开).{0,4}(开发者模式|developer mode))",
+            re.I,
+        ),
+    ),
     (
         "system_prompt_leak",
         re.compile(
-            r"((输出|打印|告诉我|泄露|原样)(你)?的?(系统提示|system ?prompt|初始指令|系统指令|角色设定)"
+            r"((输出|打印|告诉我|泄露|原样)(你)?\s*的?\s*(系统提示|system ?prompt|初始指令|系统指令|角色设定)"
             r"|(系统提示|system ?prompt|初始指令|系统指令|角色设定).*(是什么|告诉我|原样|输出|打印|泄露))",
             re.I,
         ),

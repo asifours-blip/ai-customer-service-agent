@@ -1,0 +1,10 @@
+{"case_id": "mt_001", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "订单 A10001 到哪了？", "expected_intent": "LOGISTICS_QUERY"}, {"input": "那它大概什么时候到？", "expected_intent": "LOGISTICS_QUERY"}], "expected_signal": ["已签收"]}
+{"case_id": "mt_002", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "帮我查订单 A10002"}, {"input": "它的物流单号是多少"}], "expected_signal": ["ZT9876543210"]}
+{"case_id": "mt_003", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "查一下 A10001"}, {"input": "那它还在保修期内吗", "expected_intent": "POLICY_QA"}], "expected_signal": ["12"]}
+{"case_id": "mt_004", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "A10001 买的耳机坏了，可以退款吗"}, {"input": "确认"}], "expected_signal": ["已为您创建售后工单"]}
+{"case_id": "mt_005", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "A10001 耳机有问题想退款"}, {"input": "不用了"}], "expected_signal": ["取消"]}
+{"case_id": "mt_006", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "查一下工单 T10001"}, {"input": "那这个工单还要多久"}], "expected_signal": ["OPEN"]}
+{"case_id": "mt_007", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "A10001 买了什么东西"}, {"input": "那它的保修期多久", "expected_intent": "POLICY_QA"}], "expected_signal": ["12"]}
+{"case_id": "mt_008", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "帮我查一下订单 A20001"}, {"input": "那查我自己的 A10001"}], "expected_signal": ["DELIVERED"]}
+{"case_id": "mt_009", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "查订单 A10002"}, {"input": "物流更新到哪了"}], "expected_signal": ["派送中"]}
+{"case_id": "mt_010", "category": "multi_turn", "user_id": "U001", "expected_outcome": "SUCCESS", "turns": [{"input": "耳机防水吗"}, {"input": "手表也防水吗"}], "expected_signal": ["50"]}

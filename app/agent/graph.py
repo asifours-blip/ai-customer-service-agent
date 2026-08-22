@@ -144,8 +144,8 @@ def build_agent_graph(
         if r.success:
             d = r.data or {}
             answer = (
-                f"订单 {d['order_id']}：状态 {d['status']}，金额 {d['amount']} 元。"
-                f"下单时间 {d['created_at'][:16].replace('T', ' ')}。"
+                f"订单 {d['order_id']}：状态 {d['status']}，商品 {d['product_id']}，"
+                f"金额 {d['amount']} 元，下单时间 {d['created_at'][:16].replace('T', ' ')}。"
             )
             return {
                 "route": Route.ORDER_TOOL,

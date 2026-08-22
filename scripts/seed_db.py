@@ -49,12 +49,12 @@ PRODUCTS: list[dict[str, str]] = [
 ]
 
 
-def seed() -> None:
+def seed() -> int:
     db = SessionLocal()
     try:
         if db.get(User, "U001") is not None:
             print("seed: 已存在，跳过（幂等）")
-            return
+            return 0
 
         now = utcnow()
         pwd = hash_password("demo123")
@@ -123,6 +123,7 @@ def seed() -> None:
 
         db.commit()
         print("seed: 完成（3 用户 / 3 商品 / 6 订单 / 3 物流 / 2 工单 / 1 会话）")
+        return 0
     finally:
         db.close()
 

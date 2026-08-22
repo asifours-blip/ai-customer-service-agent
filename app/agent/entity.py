@@ -53,6 +53,11 @@ def resolve_entities(text: str, session: SessionEntities, user_order_ids: list[s
         order_id = session.active_order_id
     if ticket_id is None and _PRONOUN_RE.search(text) and session.active_ticket_id:
         ticket_id = session.active_ticket_id
+    # 泛指续话回退："物流更新了吗/订单怎么样"（无显式 ID、无指代词）→ 沿用最近活跃实体（对话推断层）
+    if order_id is None and session.active_order_id and re.search(r"(物流|快递|订单|单子)", text):
+        order_id = session.active_order_id
+    if ticket_id is None and session.active_ticket_id and "工单" in text:
+        ticket_id = session.active_ticket_id
 
     # "刚才那个订单"但 session 无 active：无法唯一确定 → 不猜
     if (

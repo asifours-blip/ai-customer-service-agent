@@ -1,0 +1,5 @@
+{"case_id": "tf_001", "category": "tool_failure", "user_id": "U001", "input": "帮我查一下订单 A99999", "expected_intent": "ORDER_QUERY", "expected_tools": ["query_order"], "expected_outcome": "NOT_FOUND", "expected_signal": ["不存在"]}
+{"case_id": "tf_002", "category": "tool_failure", "user_id": "U001", "input": "查订单 A12345 的状态", "expected_intent": "ORDER_QUERY", "expected_tools": ["query_order"], "expected_outcome": "NOT_FOUND", "expected_signal": ["不存在"]}
+{"case_id": "tf_003", "category": "tool_failure", "user_id": "U001", "input": "工单 T99999 怎么样了", "expected_intent": "TICKET_QUERY", "expected_tools": ["query_ticket"], "expected_outcome": "NOT_FOUND", "expected_signal": ["不存在"]}
+{"case_id": "tf_004", "category": "tool_failure", "user_id": "U001", "input": "A10003 的物流到哪了", "expected_intent": "LOGISTICS_QUERY", "expected_tools": ["query_logistics"], "expected_outcome": "NOT_FOUND", "expected_signal": ["暂无物流"]}
+{"case_id": "tf_005", "category": "tool_failure", "user_id": "U001", "expected_outcome": "DUPLICATE", "expected_signal": ["已存在"], "turns": [{"input": "A10001 买的耳机坏了，我想申请维修"}, {"input": "确认"}, {"input": "A10001 耳机还是坏的要求维修"}, {"input": "确认"}]}

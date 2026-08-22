@@ -44,3 +44,11 @@
 
 ## D-014 Docker Hub 直连不可达（2026-08-23）
 本机网络环境无法直连 registry-1.docker.io。开发机构建：经 docker.m.daocloud.io 拉取后本地 retag 为官方镜像名（compose 文件保持官方名，CI 不受影响）。gh CLI 未安装：发布路径为本地完整历史 + 用户自行 push（见 D-009/D-011）。
+
+## D-015 离线评测组合与阈值实测（2026-08-23，Phase 7）
+决策：离线评测 = FakeLLM（确定性生成，零付费）+ 本地 BGE（真实语义检索，免费），即 `EMBEDDING_BACKEND=bge` 跑 `scripts/run_eval.py`。纯 Fake 链路（CI 单测）仅做回归，不代表检索质量。
+依据：BGE-small-zh 对本知识库实测分数分布——可答查询 top1 ∈ [0.532, 0.792]，无关查询 ∈ [0.334, 0.551]，重叠带 0.02；拒答阈值取 0.52（可答下界之下、无关上界之上不存在无损解，诚实接受边缘误判；唯一牺牲 rag_010"手表戴着游泳"被拒答）。
+教训（已加回归测试）：FakeLLM 的 answer 为整段 prompt 回显（含知识库文本），任何基于答案关键词的 outcome 判定都会被回显污染——derive_actual_outcome 的关键词分支必须以 failed_tools 非空为前置条件，HUMAN 只看 route 不看文本。
+
+## D-016 意图规则词表与优先级（2026-08-23，Phase 7）
+router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LOGISTICS → ORDER → CHITCHAT。PRODUCT 先于 POLICY：防止"续航是多长时间"被政策词吞掉；POLICY 的政策词与产品词不重叠。AFTER_SALES 必须覆盖 要求退/换/修、申请、维修、售后、退换 等动作短语（缺"要求维修"曾致 tf_005/demo4 失败）。改词表必须全量回归 + 重跑评测。

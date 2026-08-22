@@ -121,6 +121,9 @@ class AgentService:
             "route": str(final_state.get("route", "")),
             "intent": final_state.get("intent"),
             "abstained": bool(final_state.get("rag_abstained")),
+            "error_type": final_state.get("error_type") or error_type,
+            "prompt_tokens": final_state.get("prompt_tokens", 0) or 0,
+            "completion_tokens": final_state.get("completion_tokens", 0) or 0,
             "latency_ms": latency_ms,
         }
 

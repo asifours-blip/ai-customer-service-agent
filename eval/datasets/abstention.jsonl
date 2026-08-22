@@ -1,0 +1,10 @@
+{"case_id": "ab_001", "category": "abstention", "user_id": "U001", "input": "你们的会员积分怎么兑换", "expected_outcome": "REFUSED"}
+{"case_id": "ab_002", "category": "abstention", "user_id": "U001", "input": "有实体店地址吗", "expected_outcome": "REFUSED"}
+{"case_id": "ab_003", "category": "abstention", "user_id": "U001", "input": "你们老板是谁", "expected_outcome": "REFUSED"}
+{"case_id": "ab_004", "category": "abstention", "user_id": "U001", "input": "能开发票吗", "expected_outcome": "REFUSED"}
+{"case_id": "ab_005", "category": "abstention", "user_id": "U001", "input": "支持比特币支付吗", "expected_intent": "POLICY_QA", "expected_outcome": "REFUSED"}
+{"case_id": "ab_006", "category": "abstention", "user_id": "U001", "input": "简历模板有吗", "expected_outcome": "REFUSED"}
+{"case_id": "ab_007", "category": "abstention", "user_id": "U001", "input": "天气预报明天多少度", "expected_outcome": "REFUSED"}
+{"case_id": "ab_008", "category": "abstention", "user_id": "U001", "input": "推荐一首歌", "expected_outcome": "REFUSED"}
+{"case_id": "ab_009", "category": "abstention", "user_id": "U001", "input": "帮我写一段代码", "expected_outcome": "REFUSED"}
+{"case_id": "ab_010", "category": "abstention", "user_id": "U001", "input": "可以分期买吗", "expected_outcome": "REFUSED"}

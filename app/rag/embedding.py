@@ -66,6 +66,10 @@ class LocalBGEEmbedding:
     """本地 BAAI/bge-small-zh-v1.5（需要 [rag-local] 可选依赖组）。"""
 
     def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5") -> None:
+        import os
+
+        # CN 网络兜底：HF 直连不可达时走镜像（已缓存则离线加载不受影响）
+        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
         if find_spec("sentence_transformers") is None:
             raise RuntimeError(
                 "LocalBGEEmbedding 需要 [rag-local] 依赖组：pip install -e '.[rag-local]'"
@@ -73,7 +77,10 @@ class LocalBGEEmbedding:
         from sentence_transformers import SentenceTransformer
 
         self._model = SentenceTransformer(model_name)
-        self.dim = int(self._model.get_sentence_embedding_dimension() or BGE_DIM)
+        try:
+            self.dim = int(self._model.get_sentence_embedding_dimension() or BGE_DIM)
+        except AttributeError:
+            self.dim = int(self._model.get_embedding_dimension() or BGE_DIM)  # st>=6 改名兼容
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]

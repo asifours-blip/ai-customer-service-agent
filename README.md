@@ -2,7 +2,7 @@
 
 > 受控 Agent · 权限隔离 · 幂等工具 · RAG 引用溯源 · LLM 评测 · CI 离线零付费
 >
-> **状态：开发中（Phase 0~1 已完成）** —— 基础后端就绪：领域模型全套 / 简化 JWT / 订单工单 Support REST / 工单状态机 / 权限层 / 幂等工单创建。38 个测试通过（覆盖 95%，分层：纯单测 + 真实 PostgreSQL 集成）。完整规格见 [docs/spec.md](docs/spec.md)，架构决策见 [docs/decisions.md](docs/decisions.md)。
+> **状态：开发中（Phase 0~6 已完成，152 个测试全绿）** —— 受控 Agent 全链路就绪：RAG（引用/拒答）/ 四工具（幂等 create_ticket）/ 意图与实体消解 / 售后资格确定性判定 / CONFIRMATION 流 / 注入防护与 IDOR 拦截 / Trace 复盘 API / 零构建演示台（http://localhost:8000）。剩余：Phase 7 评测 → 8 CI/Docker 验收 → 9 发布。交接文档见 **[docs/HANDOVER.md](docs/HANDOVER.md)**，规格见 [docs/spec.md](docs/spec.md)，决策见 [docs/decisions.md](docs/decisions.md)。
 
 模拟真实企业售后客服场景：用户提问 → 意图识别 → 受控 Agent 决策（RAG 知识问答 / 订单物流工单工具调用 / 售后资格确定性判定 / 转人工）→ 后端权限校验 → 执行 → 带引用的回答或拒答 → 全链路 Trace → 自动化评测（110 条评测集 + LLM Judge + 人工校准）。
 
