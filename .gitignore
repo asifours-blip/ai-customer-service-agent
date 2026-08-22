@@ -1,0 +1,30 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Secrets（绝不提交）---
+.env
+.env.local
+*.key
+
+# --- 本地产物 ---
+eval/reports/generated/
+data/*.sqlite3
+models_cache/
+logs/
+*.log
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,56 @@
+"""领域异常（统一错误结构，规格 §13）。
+
+Tool 层与 API 层共用；HTTP 状态码在 API 异常处理器映射。
+DB 原始异常绝不直接暴露给 LLM / 用户。
+"""
+
+from __future__ import annotations
+
+
+class AppError(Exception):
+    code = "INTERNAL_ERROR"
+    http_status = 500
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message or self.code)
+        self.message = message or self.code
+
+
+class NotFoundError(AppError):
+    code = "NOT_FOUND"
+    http_status = 404
+
+
+class PermissionDeniedError(AppError):
+    code = "PERMISSION_DENIED"
+    http_status = 403
+
+
+class AuthenticationError(AppError):
+    code = "AUTHENTICATION_FAILED"
+    http_status = 401
+
+
+class ValidationFailedError(AppError):
+    code = "VALIDATION_FAILED"
+    http_status = 422
+
+
+class InvalidTransitionError(AppError):
+    code = "INVALID_TRANSITION"
+    http_status = 409
+
+
+class DuplicateError(AppError):
+    code = "DUPLICATE"
+    http_status = 409
+
+
+class ToolExecutionError(AppError):
+    code = "TOOL_EXECUTION_FAILED"
+    http_status = 500
+
+
+def to_error_dict(err: AppError) -> dict[str, str]:
+    """统一 {type, message} 错误结构（规格 §13）。"""
+    return {"type": err.code, "message": err.message}

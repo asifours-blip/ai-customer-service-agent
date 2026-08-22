@@ -1,0 +1,12 @@
+provider: deepseek
+checked_at: "2026-08-23"
+currency: USD
+models:
+  deepseek-v4-flash:
+    input_cache_hit_per_million: 0.0028
+    input_cache_miss_per_million: 0.14
+    output_per_million: 0.28
+  deepseek-v4-pro:
+    input_cache_hit_per_million: 0.003625
+    input_cache_miss_per_million: 0.435
+    output_per_million: 0.87

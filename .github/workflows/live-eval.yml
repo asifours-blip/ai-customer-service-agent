@@ -1,0 +1,33 @@
+# 真实 LLM Evaluation：仅手动触发，禁止 push 自动烧 API。
+name: Live Evaluation (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "越过 preflight $1 预检（硬闸 $2 仍不可越）"
+        type: boolean
+        default: false
+
+jobs:
+  live-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev,rag-local]"
+      - name: Run live evaluation with cost guard
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          NO_PAID_API: "false"
+          EMBEDDING_BACKEND: "bge"
+        run: python scripts/run_eval.py --live ${{ inputs.force && '--force' || '' }}
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-report
+          path: eval/reports/generated/
