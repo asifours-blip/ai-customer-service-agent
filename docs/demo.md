@@ -54,7 +54,7 @@
 
 ![Trace](assets/trace_panel.png)
 
-## 现场答疑要点（面试向）
+## 设计答疑要点
 
 - **副作用工具为何不能简单 retry**：READ_ONLY 重试无害；create_ticket 盲目重试会重复开单——幂等键 + DB UNIQUE 让重试语义变为"返回首张工单"。
 - **状态为何落库**：LangGraph State 是工作流内存态；pending_action（含过期时间）必须落 PostgreSQL，服务重启后确认流才可恢复。

@@ -10,7 +10,7 @@
 |---|---|---|
 | ![RAG](docs/assets/demo1_rag_citation.png) | ![售后](docs/assets/demo4_aftersales_confirm.png) | ![越权](docs/assets/demo5_idor_blocked.png) |
 
-## 九个问题（面试索引）
+## 核心设计决策与评测结果
 
 **1. 这是什么？** FastAPI + LangGraph + PostgreSQL(pgvector) 的智能客服后端：8 意图受控路由、本地 BGE 检索、4 个权限隔离工具、幂等开单、注入/越权双防线、全链路 Trace、110 条评测集与 CI。
 
@@ -24,9 +24,9 @@
 
 **6. 安全怎么验证？** 注入集 10/10 拦截（5 类模式含多行/空格容忍）、IDOR 集 10/10 拒绝（查他人订单/工单）、工单状态机禁逆向、JWT 身份与资源属主强绑定——全部自动化在评测集与测试套里，不是人工抽查。
 
-**7. 怎么评测的？** 110 条 9 类（含拒答/注入/越权/工具失败分开统计）；离线（FakeLLM+本地 BGE，零 API 费）与 live（deepseek-v4-flash）双环境；LLM Judge（v4-pro）+ 用户本人 24 条盲标做 κ 校准；成本 preflight 软闸 $1/硬闸 $2 + 逐笔对账。
+**7. 怎么评测的？** 110 条 9 类（含拒答/注入/越权/工具失败分开统计）；离线（FakeLLM+本地 BGE，零 API 费）与 live（deepseek-v4-flash）双环境；LLM Judge（v4-pro）+ 24 条人工盲标校准集做 κ 校准；成本 preflight 软闸 $1/硬闸 $2 + 逐笔对账。
 
-**8. 数字是多少？**（live 真实运行，报告快照在 `eval/reports/`，可复现）
+**8. 评测结果如何？**（live 真实运行，报告快照在 `eval/reports/`，可复现）
 
 | 指标 | 结果 |
 |---|---|
@@ -77,7 +77,7 @@ python scripts/run_eval.py --calibrate eval/calibration                 # κ 校
 | [docs/architecture.md](docs/architecture.md) | 架构分层、技术选型、部署 |
 | [docs/agent-workflow.md](docs/agent-workflow.md) | 工作流、意图/实体/确认流、幂等、双防线 |
 | [docs/evaluation.md](docs/evaluation.md) | 评测方法论、全部真实数字、κ 校准史、成本对账 |
-| [docs/demo.md](docs/demo.md) | 六个 Demo 操作手册 + 截图 + 面试答点 |
+| [docs/demo.md](docs/demo.md) | 六个 Demo 操作手册 + 截图 + 答疑要点 |
 | [docs/decisions.md](docs/decisions.md) | D-001 ~ D-018 全部工程决策（含踩坑与理由） |
 | [docs/spec.md](docs/spec.md) | 三方合并规格（唯一事实源） |
 

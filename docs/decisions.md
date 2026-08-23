@@ -3,7 +3,7 @@
 > 每个关键决策一行：背景 → 决策 → 理由。与 docs/spec.md 同步维护。
 
 ## D-001 技术栈锁定：pgvector + LangGraph
-决策来源：v1.1 补丁 §5。pgvector 而非 Qdrant：业务已用 PostgreSQL，多引一个向量服务无净收益；逃生条件=Docker 下 2h 仍不稳（须报告失败原因/已试方案/日志）。LangGraph 而非自写状态机：项目需要 State+条件路由+确认等待+Tool 节点+Trace，Graph 模型契合且有求职识别度；逃生条件=≤3h Spike 阻塞。禁止双实现并存。架构分层：Graph=编排，Service=业务逻辑，Tool=对外操作。
+决策来源：v1.1 补丁 §5。pgvector 而非 Qdrant：业务已用 PostgreSQL，多引一个向量服务无净收益；逃生条件=Docker 下 2h 仍不稳（须报告失败原因/已试方案/日志）。LangGraph 而非自写状态机：项目需要 State+条件路由+确认等待+Tool 节点+Trace，Graph 模型契合且生态成熟；逃生条件=≤3h Spike 阻塞。禁止双实现并存。架构分层：Graph=编排，Service=业务逻辑，Tool=对外操作。
 
 ## D-002 Embedding 锁定本地 BAAI/bge-small-zh-v1.5（外部审核修订②）
 背景：DeepSeek 官方 API 无通用 /embeddings 端点，"OpenAI-compatible Chat ≠ 必有 Embeddings"。决策：真实 RAG 用本地 BGE（bge-small-zh-v1.5，512 维）；抽象 EmbeddingClient（LocalBGEEmbedding/FakeEmbedding）；CI 用 Fake。依赖影响：sentence-transformers+torch 列为可选依赖组 [rag-local]，CI/Docker 默认不装，本地评测环境安装。
@@ -12,7 +12,7 @@
 决策：业务逻辑（Eligibility/Permission/Intent Parser/Cost/Retry Policy）纯单测+Mock/Fake Repository，零 DB 依赖；SQLAlchemy/Alembic/constraint/transaction/pgvector 全部真实 Docker PostgreSQL 集成测试（pytest marker `integration`）。理由：ORM 测试 SQLite 全绿≠PG 行为正确（JSON/UUID/事务语义差异）。
 
 ## D-004 幂等：SIDE_EFFECT_TOOL 禁止普通重试（修订①，P0）
-背景：create_ticket 写入成功但响应超时→自动重试→重复工单。决策：Tool 分 READ_ONLY_TOOL（Retry≤2）/SIDE_EFFECT_TOOL（禁止无条件重试）；create_ticket 带 idempotency_key（由 pending_action_id 派生）+DB UNIQUE 约束；重复调用返回首张工单。面试价值：能回答"有副作用的工具失败后为什么不能简单 retry"。
+背景：create_ticket 写入成功但响应超时→自动重试→重复工单。决策：Tool 分 READ_ONLY_TOOL（Retry≤2）/SIDE_EFFECT_TOOL（禁止无条件重试）；create_ticket 带 idempotency_key（由 pending_action_id 派生）+DB UNIQUE 约束；重复调用返回首张工单。工程意义：明确回答"有副作用的工具失败后为什么不能简单 retry"。
 
 ## D-005 AgentSessionState 持久化到 PostgreSQL（修订④）
 背景：内存 dict 存 session 状态→重启丢 pending_action、多 worker 不共享。决策：扩展 Conversation 表承载全部状态字段（含 pending_action_id/expires_at）。第一版不引 Redis。表述：LangGraph State 是工作流状态模型，业务关键状态最终落 PostgreSQL。
@@ -61,4 +61,4 @@ router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LO
 **v1（缺陷）**：参考要点是占位符"（见知识库政策）"，且无领域规则 → Judge 把正确的越权拒绝/拒答判 0 分；3/24 JSON 解析失败（未开 json_mode）。人工 24 条（23×2 + 1×0）vs Judge：Agreement 0.81、加权 κ≈-0.08 → FAIL。
 **v2（修复真实缺陷）**：按 case 类别构造参考要点（注入/越权/拒答场景写明"正确行为=拒绝"；rag 给整篇 expected_document；其余给种子事实表）；多轮给完整对话链；json_mode；max_tokens 300→1200（v4-pro 是推理模型，reasoning 计入 completion，300 会在输出 JSON 前耗尽 → 4/24 空 content，实测复现）。结果 22/24，κ=0.478。分歧仅剩 mt_001/ord_001 两处 1-vs-2 宽严边界。
 **v3（原则性澄清后停止）**：明确"评分只看事实正确性与完整性，格式（DELIVERED/P001）不扣分；理由必须忠于原文"。ord_001 达成一致，但 mt_003 反向翻为 1 分 → 仍 22/24，κ=0.314。**判定为过拟合信号，停止迭代**。
-**κ 悖论分析**：人工标签 23×2+1×0 的近单一分布下，无权 κ≥0.70 数学上要求 24/24 完全一致（单条 1 分之隔 → κ≈0.65）；mt_001/mt_003 属人类标注员之间也未必一致的边界案例。结论：该 gate 在当前校准集上不可诚实达成；按规格执行"κ<0.70 不发布 Judge 指标"，确定性指标（任务成功/权限/注入/RAG 命中等）不依赖 Judge，不受影响。迭代全过程与三轮 judge_scores 保留在 git 历史与 calibration_report 中。
+**κ 悖论分析**：人工标签 23×2+1×0 的近单一分布下，无权 κ≥0.70 数学上要求 24/24 完全一致（单条 1 分之隔 → κ≈0.65）；mt_001/mt_003 属不同人工标注者之间也未必一致的边界案例。结论：该 gate 在当前校准集上不可诚实达成；按规格执行"κ<0.70 不发布 Judge 指标"，确定性指标（任务成功/权限/注入/RAG 命中等）不依赖 Judge，不受影响。迭代全过程与三轮 judge_scores 保留在 git 历史与 calibration_report 中。
