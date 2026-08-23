@@ -24,12 +24,13 @@ def get_order(db: Session, order_id: str, current_user_id: str) -> Order:
 
 
 def list_orders(db: Session, user_id: str) -> list[Order]:
-    # created_at 同秒平局时 PG 返回顺序不确定（CI/Linux 曾翻车），必须加 id 决胜
+    # 列表契约：按创建时间升序（同秒平局用 id 决胜）。
+    # Linux 上 utcnow 微秒精度使 created_at 严格递减于 desc 排序，曾致 CI 翻车
     return list(
         db.scalars(
             select(Order)
             .where(Order.user_id == user_id)
-            .order_by(Order.created_at.desc(), Order.id.asc())
+            .order_by(Order.created_at.asc(), Order.id.asc())
         )
     )
 
