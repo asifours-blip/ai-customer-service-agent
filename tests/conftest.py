@@ -32,19 +32,24 @@ from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
+from sqlalchemy.engine import make_url  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 
 @pytest.fixture(scope="session")
 def db_engine():
-    admin = create_engine("postgresql+psycopg://app:app@localhost:5432/postgres", pool_pre_ping=True)
+    # 管理连接（建库用）从 TEST_DATABASE_URL 派生，仅替换库名——
+    # 曾硬编码 localhost:5432，测试库不在该地址时集成测试全灭（CI/Linux 容器复现）
+    admin_url = make_url(TEST_DATABASE_URL).set(database="postgres")
+    admin = create_engine(admin_url, pool_pre_ping=True)
     with admin.connect() as conn:
         conn.execution_options(isolation_level="AUTOCOMMIT")
+        target_db = make_url(TEST_DATABASE_URL).database or TEST_DB_NAME
         exists = conn.execute(
-            text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": TEST_DB_NAME}
+            text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": target_db}
         ).scalar()
         if not exists:
-            conn.execute(text(f'CREATE DATABASE "{TEST_DB_NAME}"'))
+            conn.execute(text(f'CREATE DATABASE "{target_db}"'))
     admin.dispose()
 
     cfg = Config(str(ROOT / "alembic.ini"))

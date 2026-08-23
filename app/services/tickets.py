@@ -90,11 +90,17 @@ def get_ticket(db: Session, ticket_id: str, current_user_id: str, *, is_support:
 
 
 def list_tickets(db: Session, user_id: str) -> list[Ticket]:
-    return list(db.scalars(select(Ticket).where(Ticket.user_id == user_id).order_by(Ticket.created_at.desc())))
+    return list(
+        db.scalars(
+            select(Ticket)
+            .where(Ticket.user_id == user_id)
+            .order_by(Ticket.created_at.desc(), Ticket.id.desc())
+        )
+    )
 
 
 def list_tickets_for_support(db: Session, status: str | None = None) -> list[Ticket]:
-    stmt = select(Ticket).order_by(Ticket.created_at.desc())
+    stmt = select(Ticket).order_by(Ticket.created_at.desc(), Ticket.id.desc())
     if status is not None:
         stmt = stmt.where(Ticket.status == status)
     return list(db.scalars(stmt))
@@ -126,5 +132,9 @@ def add_reply(db: Session, ticket_id: str, author_id: str, author_role: str, con
 
 def list_replies(db: Session, ticket_id: str) -> list[TicketReply]:
     return list(
-        db.scalars(select(TicketReply).where(TicketReply.ticket_id == ticket_id).order_by(TicketReply.created_at))
+        db.scalars(
+            select(TicketReply)
+            .where(TicketReply.ticket_id == ticket_id)
+            .order_by(TicketReply.created_at, TicketReply.id)
+        )
     )

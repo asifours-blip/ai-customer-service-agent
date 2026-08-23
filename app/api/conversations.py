@@ -22,7 +22,9 @@ def list_my_conversations(
     user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[ConversationOut]:
     rows = db.scalars(
-        select(Conversation).where(Conversation.user_id == user.id).order_by(Conversation.updated_at.desc())
+        select(Conversation)
+        .where(Conversation.user_id == user.id)
+        .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
     )
     return [ConversationOut.model_validate(c) for c in rows]
 
@@ -38,7 +40,7 @@ def get_my_conversation(
         raise NotFoundError(f"会话不存在: {conversation_id}")
     ensure_owner(conv.user_id, user.id)
     messages = db.scalars(
-        select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at)
+        select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at, Message.id)
     )
     out = ConversationDetailOut.model_validate(conv)
     out.messages = [MessageOut.model_validate(m) for m in messages]

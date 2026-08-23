@@ -24,7 +24,14 @@ def get_order(db: Session, order_id: str, current_user_id: str) -> Order:
 
 
 def list_orders(db: Session, user_id: str) -> list[Order]:
-    return list(db.scalars(select(Order).where(Order.user_id == user_id).order_by(Order.created_at.desc())))
+    # created_at 同秒平局时 PG 返回顺序不确定（CI/Linux 曾翻车），必须加 id 决胜
+    return list(
+        db.scalars(
+            select(Order)
+            .where(Order.user_id == user_id)
+            .order_by(Order.created_at.desc(), Order.id.asc())
+        )
+    )
 
 
 def get_logistics(db: Session, order_id: str, current_user_id: str) -> Logistics:

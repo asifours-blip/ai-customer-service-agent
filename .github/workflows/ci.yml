@@ -24,7 +24,7 @@ jobs:
       - name: Ruff
         run: ruff check .
       - name: Mypy (strict)
-        run: mypy app
+        run: mypy app eval
       - name: Pytest (offline)
         run: pytest -q -m "not integration and not live" --cov=app --cov-report=term-missing
       - name: Upload test reports
