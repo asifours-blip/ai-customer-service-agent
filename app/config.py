@@ -52,4 +52,12 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # live 模式禁用默认 JWT 密钥（P1 守卫）：公开可猜的 HS256 密钥 = 令牌可伪造。
+    # 离线/CI（no_paid_api=true，FakeLLM/FakeEmbedding）不受影响。
+    if not settings.no_paid_api and settings.jwt_secret == "dev-only-secret-change-me-0123456789abcdef":
+        raise RuntimeError(
+            "live 模式（NO_PAID_API=false）禁止使用默认 JWT_SECRET："
+            "请在环境变量设置 >=32 字节的随机密钥后重试"
+        )
+    return settings

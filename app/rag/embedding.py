@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from functools import lru_cache
 from importlib.util import find_spec
 from typing import Protocol
 
@@ -90,7 +91,9 @@ class LocalBGEEmbedding:
         return [[float(x) for x in vec] for vec in vectors]
 
 
+@lru_cache(maxsize=4)
 def get_embedding_client(backend: str, bge_model_name: str) -> EmbeddingClient:
+    """按 (backend, model) 缓存实例：LocalBGEEmbedding 构造即加载模型，每请求重建不可接受。"""
     if backend == "fake":
         return FakeEmbedding()
     if backend == "bge":
