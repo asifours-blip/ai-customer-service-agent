@@ -62,3 +62,9 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Pytest (integration, real PostgreSQL + pgvector)
         run: pytest -q -m integration --cov=app --cov-report=term-missing
+      - name: Ticket concurrency regressions (real PostgreSQL)
+        run: >-
+          pytest -q
+          tests_stress/test_race_conditions.py::test_s1_concurrent_same_key_exactly_one_ticket
+          tests_stress/test_race_conditions.py::test_s1b_concurrent_different_keys_create_unique_ticket_ids
+          tests_stress/test_race_conditions.py::test_s2_concurrent_double_confirm_returns_controlled_idempotent_semantics
