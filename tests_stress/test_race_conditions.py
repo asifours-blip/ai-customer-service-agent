@@ -1,7 +1,7 @@
 """并发/竞态压测（本地验证用，不进正式 eval，不进 CI）。
 
 覆盖：
-S1 同 idempotency_key 多并发 create_ticket（8 线程 Barrier 对齐）
+S1 同 idempotency_key 多并发 create_ticket（10 线程 Barrier 对齐）
 S2 同会话并发重复"确认"（Agent 层，check_pending 消费竞态）
 S3 响应丢失后重试（executor 超时但 INSERT 已 commit）
 S4 pending 过期与确认竞争（EXPIRED 分支 vs 有效执行）
@@ -17,12 +17,14 @@ from datetime import timedelta
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.agent.service import AgentService
 from app.agent.state import make_pending, save_state_to_conversation
 from app.api.chat import _agent_service
 from app.models.conversation import Conversation
 from app.models.ticket import Ticket
+from app.services import tickets as ticket_service
 from app.services.orders import get_order
 from app.tools.ticket import build_registry
 
@@ -38,14 +40,48 @@ def _stress_ticket_count(factory, key_prefix: str = "pa-stress-%") -> int:
 
 # ---------- S1：同 idempotency_key 并发建单 ----------
 
-def test_s1_concurrent_same_key_exactly_one_ticket(db) -> None:
+def test_s1_concurrent_same_key_exactly_one_ticket(db, monkeypatch) -> None:
     registry = build_registry()
     tool = registry.require("create_ticket")
     key = "pa-stress-s1-0001"
-    n = 8
+    n = 10
     barrier = threading.Barrier(n)
+    idempotency_lookup_barrier = threading.Barrier(n)
+    allocation_barrier = threading.Barrier(n)
     outcomes: list[dict] = []
     lock = threading.Lock()
+    idempotency_lookup_count = 0
+    rollback_count = 0
+    original_scalar = Session.scalar
+    original_rollback = Session.rollback
+    original_next_ticket_id = ticket_service.next_ticket_id
+
+    def synchronized_scalar(session, statement, *args, **kwargs):
+        nonlocal idempotency_lookup_count
+        result = original_scalar(session, statement, *args, **kwargs)
+        if "tickets.idempotency_key" in str(statement):
+            with lock:
+                should_wait = idempotency_lookup_count < n
+                if should_wait:
+                    idempotency_lookup_count += 1
+            if should_wait:
+                idempotency_lookup_barrier.wait()
+        return result
+
+    def synchronized_next_ticket_id(session):
+        ticket_id = original_next_ticket_id(session)
+        allocation_barrier.wait()
+        return ticket_id
+
+    def counted_rollback(session, *args, **kwargs):
+        nonlocal rollback_count
+        with lock:
+            rollback_count += 1
+        return original_rollback(session, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "scalar", synchronized_scalar)
+    monkeypatch.setattr(Session, "rollback", counted_rollback)
+    monkeypatch.setattr(ticket_service, "next_ticket_id", synchronized_next_ticket_id)
 
     def worker(i: int) -> None:
         barrier.wait()  # 对齐起跑，最大化 SELECT-then-INSERT 竞态窗口
@@ -56,8 +92,12 @@ def test_s1_concurrent_same_key_exactly_one_ticket(db) -> None:
                     "title": f"stress-{i}", "idempotency_key": key,
                 })
                 with lock:
-                    outcomes.append({"kind": "ok", "replay": r.idempotent_replay,
-                                     "ticket": r.data.get("ticket_id") if r.data else None})
+                    outcomes.append({
+                        "kind": "ok" if r.success else "tool_error",
+                        "replay": r.idempotent_replay,
+                        "ticket": r.data.get("ticket_id") if r.data else None,
+                        "error": r.error,
+                    })
             except Exception as exc:  # 记录原始异常类型（不吞，供报告）
                 with lock:
                     outcomes.append({"kind": type(exc).__name__, "detail": str(exc)[:120]})
@@ -70,9 +110,66 @@ def test_s1_concurrent_same_key_exactly_one_ticket(db) -> None:
     for o in outcomes:
         kinds[o["kind"]] = kinds.get(o["kind"], 0) + 1
     print("\nS1 outcomes:", kinds, outcomes)
-    # 语义断言：所有成功路径必须指向同一张工单
+    # 语义断言：每个调用都必须获得首张工单，而不是把 UNIQUE 竞争伪装成内部错误。
+    assert len(outcomes) == n
+    assert all(o["kind"] == "ok" for o in outcomes), outcomes
+    assert sum(not o["replay"] for o in outcomes if o["kind"] == "ok") == 1
+    assert sum(o["replay"] for o in outcomes if o["kind"] == "ok") == n - 1
     tickets = {o["ticket"] for o in outcomes if o["kind"] == "ok"}
-    assert len(tickets) <= 1
+    assert len(tickets) == 1
+    assert rollback_count == n - 1
+
+
+def test_s1b_concurrent_different_keys_create_unique_ticket_ids(db, monkeypatch) -> None:
+    """十个合法独立请求并发时，ID allocator 不能给出同一个主键。"""
+    registry = build_registry()
+    tool = registry.require("create_ticket")
+    n = 10
+    allocation_barrier = threading.Barrier(n)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+    original_next_ticket_id = ticket_service.next_ticket_id
+
+    def synchronized_next_ticket_id(session):
+        ticket_id = original_next_ticket_id(session)
+        allocation_barrier.wait()
+        return ticket_id
+
+    monkeypatch.setattr(ticket_service, "next_ticket_id", synchronized_next_ticket_id)
+
+    def worker(i: int) -> None:
+        with db() as s:
+            try:
+                result = tool.execute(
+                    s,
+                    U,
+                    {
+                        "category": "OTHER",
+                        "title": f"stress-different-{i}",
+                        "idempotency_key": f"pa-stress-s1b-{i:04d}",
+                    },
+                )
+                with lock:
+                    outcomes.append(
+                        {
+                            "kind": "ok" if result.success else "tool_error",
+                            "ticket": result.data.get("ticket_id") if result.data else None,
+                            "error": result.error,
+                        }
+                    )
+            except Exception as exc:
+                with lock:
+                    outcomes.append({"kind": type(exc).__name__, "detail": str(exc)[:120]})
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, range(n)))
+
+    print("\nS1b outcomes:", outcomes)
+    assert len(outcomes) == n
+    assert all(outcome["kind"] == "ok" for outcome in outcomes), outcomes
+    ticket_ids = {outcome["ticket"] for outcome in outcomes}
+    assert len(ticket_ids) == n
+    assert _stress_ticket_count(db, "pa-stress-s1b-%") == n
 
 
 # ---------- S2：同会话并发重复确认 ----------
@@ -96,12 +193,8 @@ def _seed_pending(factory, session_id: str, *, expires_in: float, pending_id: st
         save_state_to_conversation(s, conv, active_order_id=ORDER, active_ticket_id=None, pending=pending)
 
 
-def test_s2_concurrent_double_confirm_at_most_one_ticket(db) -> None:
-    """实验结论（2026-08-24 实测）：
-    - 数据完整性 ✓：UNIQUE 约束保证恰 1 张工单（败者的 INSERT 被数据库拒绝）；
-    - 语义缺口 G-1 ✗：败者线程的 UniqueViolation 未被工具层捕获为 DUPLICATE/replay，
-      以 PendingRollbackError 穿透到服务层（表现为"内部异常"话术而非"重复确认"话术）。
-      对应审计 16 号：create_ticket 为 SELECT-then-INSERT，无 IntegrityError 兜底。"""
+def test_s2_concurrent_double_confirm_returns_controlled_idempotent_semantics(db) -> None:
+    """竞争确认只允许一次副作用，竞争者必须得到受控语义，不能泄露 DB/500 错误。"""
     sid = "stress-s2-session"
     _seed_pending(db, sid, expires_in=600, pending_id="pa-stress-s2-0001")
     svc: AgentService = _agent_service()
@@ -116,7 +209,7 @@ def test_s2_concurrent_double_confirm_at_most_one_ticket(db) -> None:
             try:
                 result = svc.handle(s, U, sid, "确认")
                 with lock:
-                    outcomes.append({"kind": "ok", "answer": str(result.get("answer", ""))[:80]})
+                    outcomes.append({"kind": "ok", "answer": str(result.get("answer", ""))})
             except Exception as exc:
                 with lock:
                     outcomes.append({"kind": type(exc).__name__, "detail": str(exc)})
@@ -129,11 +222,13 @@ def test_s2_concurrent_double_confirm_at_most_one_ticket(db) -> None:
         {**o, "detail": o.get("detail", "")[:80]} for o in outcomes
     ])
     assert count == 1, f"并发确认必须恰产生 1 张工单，实际 {count}"
-    assert any(o["kind"] == "ok" for o in outcomes), "至少一个确认成功"
-    violation = [o for o in outcomes if "UniqueViolation" in o.get("detail", "")]
-    replay = [o for o in outcomes if o["kind"] == "ok" and "已存在" in o.get("answer", "")]
-    # 允许两种合法败者形态：幂等重放（快路径）或 UniqueViolation（慢竞态，已知缺口 G-1）
-    assert len(violation) + len(replay) + 1 == n, "每个败者必须是重放或被 UNIQUE 拒绝，不得产生第二单"
+    assert len(outcomes) == n
+    assert all(o["kind"] == "ok" for o in outcomes), outcomes
+    answers = [o["answer"] for o in outcomes]
+    assert sum("已为您创建售后工单" in answer for answer in answers) == 1
+    assert sum("已存在（本次为重复确认，未重复创建）" in answer for answer in answers) == n - 1
+    assert all("PendingRollbackError" not in answer for answer in answers)
+    assert all("内部错误" not in answer and "TOOL_EXECUTION_FAILED" not in answer for answer in answers)
 
 
 # ---------- S3：响应丢失后重试（超时≠未写入） ----------

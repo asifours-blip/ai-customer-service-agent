@@ -6,7 +6,8 @@ Agent 的 create_ticket Tool 与 REST POST /api/tickets 都走这里。
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ticket import Ticket, TicketReply
@@ -15,16 +16,25 @@ from app.services.errors import DuplicateError, NotFoundError, ValidationFailedE
 from app.services.orders import get_order
 from app.services.permission import ensure_owner
 
+_IDEMPOTENCY_KEY_UNIQUE_CONSTRAINT = "tickets_idempotency_key_key"
+
+
+def _is_idempotency_key_unique_violation(exc: IntegrityError) -> bool:
+    """仅识别 PostgreSQL 的 tickets.idempotency_key 唯一约束。"""
+    original = exc.orig
+    return (
+        getattr(original, "sqlstate", None) == "23505"
+        and getattr(getattr(original, "diag", None), "constraint_name", None)
+        == _IDEMPOTENCY_KEY_UNIQUE_CONSTRAINT
+    )
+
 
 def next_ticket_id(db: Session) -> str:
-    """生成 T1000N 风格的下一个工单号（演示规模下取 max+1）。"""
-    last = db.scalar(select(Ticket.id).order_by(Ticket.id.desc()).limit(1))
-    if last is None:
-        return "T10001"
-    try:
-        return f"T{int(last[1:]) + 1}"
-    except ValueError:
-        raise ValidationFailedError(f"工单号序列异常: {last}") from None
+    """从 PostgreSQL sequence 分配数字，再保持既有 T<number> 业务格式。"""
+    number = db.scalar(text("SELECT nextval('ticket_id_sequence')"))
+    if not isinstance(number, int):
+        raise ValidationFailedError("ticket_id_sequence 未返回整数")
+    return f"T{number}"
 
 
 def create_ticket(
@@ -62,6 +72,10 @@ def create_ticket(
             )
         )
         if dup is not None:
+            if idempotency_key is not None:
+                existing = db.scalar(select(Ticket).where(Ticket.idempotency_key == idempotency_key))
+                if existing is not None:
+                    return existing, False
             raise DuplicateError(f"该订单已存在同类进行中的工单: {dup.id}")
 
     ticket = Ticket(
@@ -75,7 +89,16 @@ def create_ticket(
         idempotency_key=idempotency_key,
     )
     db.add(ticket)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        if idempotency_key is None or not _is_idempotency_key_unique_violation(exc):
+            raise
+        db.rollback()
+        existing = db.scalar(select(Ticket).where(Ticket.idempotency_key == idempotency_key))
+        if existing is None:
+            raise
+        return existing, False
     db.refresh(ticket)
     return ticket, True
 
