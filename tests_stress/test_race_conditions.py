@@ -15,7 +15,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
-import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,7 +24,6 @@ from app.api.chat import _agent_service
 from app.models.conversation import Conversation
 from app.models.ticket import Ticket
 from app.services import tickets as ticket_service
-from app.services.orders import get_order
 from app.tools.ticket import build_registry
 
 U = "U001"
