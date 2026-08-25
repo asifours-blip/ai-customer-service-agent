@@ -4,7 +4,7 @@
 
 模拟真实企业售后客服：用户提问 → 意图识别 → 受控 Agent 决策（RAG 知识问答 / 订单物流工单工具调用 / 售后资格确定性判定 / 转人工）→ 后端权限校验 → 执行 → 带引用的回答或诚实拒答 → 全链路 Trace → 自动化评测（110 条评测集 + LLM Judge + 人工盲标校准）。
 
-**状态：Phase 0~9 全部完成。183 个测试全绿（ruff / mypy strict / pytest）。**
+**状态：Phase 0~9 全部完成。默认离线 suite 189 个测试全绿（ruff / mypy strict / pytest）；真实 PostgreSQL 集成与 Ticket 并发回归在独立 CI job 执行。**
 
 | Demo 1 · RAG 引用 | Demo 4 · 售后确认+幂等 | Demo 5 · 越权拦截 |
 |---|---|---|
@@ -78,6 +78,7 @@ python scripts/run_eval.py --calibrate eval/calibration                 # κ 校
 | [docs/agent-workflow.md](docs/agent-workflow.md) | 工作流、意图/实体/确认流、幂等、双防线 |
 | [docs/evaluation.md](docs/evaluation.md) | 评测方法论、全部真实数字、κ 校准史、成本对账 |
 | [docs/demo.md](docs/demo.md) | 六个 Demo 操作手册 + 截图 + 答疑要点 |
+| [docs/ticket-concurrency-case-study.md](docs/ticket-concurrency-case-study.md) | PostgreSQL 并发下定位 Ticket ID 竞态、最小修复与 CI 回归 |
 | [docs/decisions.md](docs/decisions.md) | D-001 ~ D-018 全部工程决策（含踩坑与理由） |
 | [docs/spec.md](docs/spec.md) | 三方合并规格（唯一事实源） |
 
