@@ -1,10 +1,16 @@
 # Agent + RAG 智能客服与工单自动化平台
 
+[![CI](https://github.com/asifours-blip/ai-customer-service-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/asifours-blip/ai-customer-service-agent/actions/workflows/ci.yml)
+
 > 受控 Agent · 权限隔离 · 幂等工具 · RAG 引用溯源 · 全链路 Trace · 可复现评测 · CI 离线零付费
 
 模拟真实企业售后客服：用户提问 → 意图识别 → 受控 Agent 决策（RAG 知识问答 / 订单物流工单工具调用 / 售后资格确定性判定 / 转人工）→ 后端权限校验 → 执行 → 带引用的回答或诚实拒答 → 全链路 Trace → 自动化评测（110 条评测集 + LLM Judge + 人工盲标校准）。
 
-**状态：Phase 0~9 全部完成。默认离线 suite 189 个测试全绿（ruff / mypy strict / pytest）；真实 PostgreSQL 集成与 Ticket 并发回归在独立 CI job 执行。**
+**状态：Phase 0~9 全部完成。默认质量门禁以 CI 与 `pytest --collect-only` 为准；真实 PostgreSQL 集成与 Ticket 并发回归在独立 CI job 执行。**
+
+## Repository history
+
+2026-08-23 是首次将已完成模块按功能切片入库的记录，并非线上迭代节奏。2026-08-24 的 PostgreSQL sequence 修复是公开后的真实 Ticket ID 并发缺陷；根因、最小修复与回归证据见 [Ticket concurrency case study](docs/ticket-concurrency-case-study.md)。当前行为以 `main` 和 GitHub Actions 为准。
 
 | Demo 1 · RAG 引用 | Demo 4 · 售后确认+幂等 | Demo 5 · 越权拦截 |
 |---|---|---|
@@ -55,11 +61,17 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -e ".[dev]"              # CI 同款（无 torch）
-.venv/Scripts/pip install -e ".[dev,rag-local]"    # 需要本地 BGE 时
-.venv/Scripts/pytest -q -m "not integration and not live"   # 离线单测（秒级）
-docker compose up -d db && .venv/Scripts/pytest -q -m integration  # 真实 PG 集成
-.venv/Scripts/ruff check . && .venv/Scripts/mypy app eval
+# Linux/macOS
+source .venv/bin/activate
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+
+python -m pip install -e ".[dev]"              # CI 同款（无 torch）
+python -m pip install -e ".[dev,rag-local]"    # 需要本地 BGE 时
+python -m pytest -q -m "not integration and not live"   # 离线单测（秒级）
+docker compose up -d db && python -m pytest -q -m integration  # 真实 PG 集成
+python -m ruff check . && python -m mypy app eval
 ```
 
 ## 评测复现

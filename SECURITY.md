@@ -2,7 +2,7 @@
 
 ## Reporting
 
-请通过 GitHub Issue 或仓库所有者联系方式报告安全问题，不要在公开 issue 中粘贴敏感信息。
+请不要通过公开 GitHub Issue 报告安全问题。请使用本仓库的 [private vulnerability reporting form](https://github.com/asifours-blip/ai-customer-service-agent/security/advisories/new)。
 
 ## Notes
 
