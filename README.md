@@ -54,8 +54,26 @@
 ```bash
 cp .env.example .env        # 填 DEEPSEEK_API_KEY（仅 live 评测/真实演示需要；容器离线模式不需要）
 docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint 自动迁移/种子/摄取
-# 打开 http://localhost:8000 —— 零构建演示台（六个 Demo 按钮 + Trace 面板）
+# 打开 http://localhost:8000 —— 登录后按角色进入客户端或客服工作台
 ```
+
+### 客户端与客服工作台
+
+零构建前端（原生 JS + ES modules，由 FastAPI `/static` 提供），hash 路由（如 `#/tickets/T10001`），刷新、直接打开链接、重新登录后都回到同一视图；token 存 sessionStorage，任何接口 401 → 登录页 → 登录后回到原页面。
+
+- **客户**：会话列表与历史、聊天（引用来源 + 售后资格判定依据 + Trace）、待确认操作卡片（确认 / 取消）、我的订单、我的工单（处理记录时间线、补充回复、解决后评价一次）。
+- **客服**：工单队列（未指派 / 我的 / 全部 + 状态筛选）、领取、时间线、回复、状态推进（仅领取人）。
+
+前端按钮只是体验层，后端每个接口独立鉴权（角色、资源属主、领取人、工单状态）。规则见 `docs/decisions.md` D-019 / D-020。
+
+种子测试账号（仅本地演示 / 测试库使用，定义在 `scripts/seed_db.py`），口令均为 `demo123`：
+
+| 用户名 | 角色 | 说明 |
+|---|---|---|
+| `demo_customer` | 客户 U001 | 主演示用户（A10001 签收 3 天，可退款） |
+| `second_customer` | 客户 U002 | 越权测试用的「别人」 |
+| `support_agent` | 客服 SUPPORT001 | 已领取 T10002 |
+| `support_agent2` | 客服 SUPPORT002 | 第二名客服（领取竞争） |
 
 ## 开发
 
@@ -72,6 +90,18 @@ python -m pip install -e ".[dev,rag-local]"    # 需要本地 BGE 时
 python -m pytest -q -m "not integration and not live"   # 离线单测（秒级）
 docker compose up -d db && python -m pytest -q -m integration  # 真实 PG 集成
 python -m ruff check . && python -m mypy app eval
+```
+
+### 端到端测试（真实浏览器，默认不进 CI 快速 job）
+
+`tests_e2e/` 用 uvicorn 子进程启动真实应用、连真实 PostgreSQL 测试库，Playwright（Chromium）驱动页面。**每个用例都会清空并重建测试库数据**，所以必须同时设置 `DATABASE_URL` 与 `TEST_DATABASE_URL` 且指向同一个测试库，否则直接退出。
+
+```bash
+python -m pip install -e ".[dev,e2e]"
+python -m playwright install chromium          # 浏览器下载到用户缓存目录，不装系统级软件
+export DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_test
+export TEST_DATABASE_URL=$DATABASE_URL
+python -m pytest tests_e2e -v                  # 加 --headed 可看浏览器操作
 ```
 
 ## 评测复现

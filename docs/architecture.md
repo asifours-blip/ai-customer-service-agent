@@ -34,7 +34,7 @@ app/
 ├── llm/            LLMClient 协议 + FakeLLMClient + DeepseekClient（NO_PAID_API 策略闸）
 ├── models/         User/Product/Order/Logistics/Ticket/TicketReply/
 │                   Conversation(AgentSessionState 持久化字段)/Message/AgentTrace
-└── static/         零构建单页演示台（聊天 + Trace 面板 + 六个 Demo 按钮）
+└── static/         零构建前端（原生 ES modules + hash 路由）：登录页、客户端、客服工作台
 eval/               数据集(9 类 110 条) / runner / metrics / judge / calibration / cost / report
 knowledge_base/     12 篇中文 Markdown（front-matter 含 document_id/policy_version）
 policy/             rules.yaml —— 退款 7 天/换货 15 天/保修 12 个月×30 天，机器可读规则源

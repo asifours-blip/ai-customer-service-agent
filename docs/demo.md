@@ -1,6 +1,6 @@
 # 演示手册（六个 Demo）
 
-> 环境：本地真实模式（`DEEPSEEK_API_KEY` + `EMBEDDING_BACKEND=bge`），登录身份 **客户 U001（demo_customer）**。截图为 2026-08-23 真实运行捕获，存于 `docs/assets/`。演示台右上身份选择器登录后，点击对应 Demo 按钮即可，每个按钮发送预设消息。
+> 环境：本地真实模式（`DEEPSEEK_API_KEY` + `EMBEDDING_BACKEND=bge`），登录身份 **客户 U001（demo_customer）**。截图为 2026-08-23 真实运行捕获，存于 `docs/assets/`。截图为阶段 1 的演示台界面；阶段 2 起改为登录页 + 客户端：以 `demo_customer / demo123` 登录后在「咨询」页发送下文各 Demo 的消息（前四条有快捷示例按钮），Demo4 可直接点击确认卡片上的「确认创建」，也可以回复【确认】——两者走同一确认路径与同一幂等键。
 
 ## Demo 1 — 知识库问答 + 引用（RAG）
 

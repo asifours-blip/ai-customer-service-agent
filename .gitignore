@@ -28,3 +28,6 @@ logs/
 Thumbs.db
 .idea/
 .vscode/
+
+# --- Playwright E2E 失败产物 ---
+test-results/

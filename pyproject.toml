@@ -28,6 +28,11 @@ dev = [
     "mypy>=1.10",
     "types-pyyaml",
 ]
+# 真实浏览器端到端测试（tests_e2e/，不进 CI 快速 job）；浏览器另需 `python -m playwright install chromium`
+e2e = [
+    "playwright>=1.45",
+    "pytest-playwright>=0.5",
+]
 # 本地真实 embedding（BAAI/bge-small-zh-v1.5）；CI 不安装，CI 使用 FakeEmbedding
 rag-local = [
     "sentence-transformers>=3.0",

@@ -69,4 +69,8 @@ def test_failed_case_fully_replayable_via_trace(client) -> None:
 def test_index_page_served(client) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "演示台" in resp.text
+    assert "客服工作台" in resp.text
+    assert "demo123" not in resp.text  # 前端不再内置口令
+    js = client.get("/static/js/app.js")
+    assert js.status_code == 200
+    assert js.headers["content-type"].startswith("text/javascript")  # ES module 需要正确的 MIME

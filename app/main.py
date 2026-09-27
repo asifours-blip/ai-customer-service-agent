@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -11,6 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api import api_router
 from app.services.errors import AppError, to_error_dict
+
+# 前端用原生 ES modules：浏览器要求 JS MIME 类型严格正确。
+# Windows 注册表可能把 .js 映射为 text/plain，这里显式固定，避免模块脚本被拒绝加载。
+mimetypes.add_type("text/javascript", ".js")
 
 
 def create_app() -> FastAPI:
