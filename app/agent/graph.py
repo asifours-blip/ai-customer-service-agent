@@ -74,8 +74,16 @@ def build_agent_graph(
 
     def check_pending(state: AgentState) -> dict[str, Any]:
         pending = state.get("pending_action")
+        decision = state.get("decision")
+        if decision is not None:
+            # 结构化确认：卡片上的 id 必须仍是会话当前的 pending_action，否则不执行、也不动当前 pending
+            if not pending or pending.get("id") != state.get("expected_pending_id"):
+                return {"confirmation": "STALE", "final_answer": "该待确认操作已失效或已处理，请以最新消息为准。"}
+            if pending_expired(pending):
+                return {"confirmation": "STALE", "pending_action": None,
+                        "final_answer": "该申请已超过确认时限，请重新发起售后申请。"}
         if pending and not pending_expired(pending):
-            conf = detect_confirmation(state["user_query"])
+            conf = Confirmation(decision) if decision is not None else detect_confirmation(state["user_query"])
             if conf is Confirmation.YES:
                 return {"confirmation": "YES"}
             if conf is Confirmation.NO:
@@ -236,7 +244,8 @@ def build_agent_graph(
                 "需要我为您创建售后工单吗？（回复【确认】即可）"
             )
             return {"route": Route.AFTER_SALES, "tool_calls": [call_q], "tool_results": [r.data or {}],
-                    "eligibility": {"eligible": True, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule},
+                    "eligibility": {"eligible": True, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule,
+                                    "request_type": req_type, "order_id": order_id, "details": det},
                     "rag_sources": policy.sources, "rag_abstained": policy.abstained,
                     "pending_action": pending, "final_answer": answer, "active_order_id": order_id}
         dd, ad = det.get("delivered_days"), det.get("allowed_days")
@@ -249,7 +258,8 @@ def build_agent_graph(
         default_reason = f"很抱歉，订单 {order_id} 不符合申请条件（{elig.reason_code}）"
         answer = reason_map.get(elig.reason_code, default_reason) + "。"
         return {"route": Route.AFTER_SALES, "tool_calls": [call_q], "tool_results": [r.data or {}],
-                "eligibility": {"eligible": False, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule},
+                "eligibility": {"eligible": False, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule,
+                                "request_type": req_type, "order_id": order_id, "details": det},
                 "rag_sources": policy.sources, "rag_abstained": policy.abstained,
                 "final_answer": answer, "active_order_id": order_id}
 
@@ -370,7 +380,7 @@ def build_agent_graph(
     )
     b.add_conditional_edges(
         "check_pending",
-        lambda s: "finalize" if s.get("confirmation") == "NO" else "classify",
+        lambda s: "finalize" if s.get("confirmation") in ("NO", "STALE") else "classify",
         {"finalize": "finalize", "classify": "classify"},
     )
     b.add_edge("classify", "resolve_entity")

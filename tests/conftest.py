@@ -71,7 +71,11 @@ def db(db_engine):
 
     with db_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
-            conn.execute(table.delete())
+            if table.name == "ticket_events":
+                # 只追加表：行级触发器拒绝 DELETE；TRUNCATE 不触发行级触发器，仅测试清库使用
+                conn.execute(text("TRUNCATE TABLE ticket_events"))
+            else:
+                conn.execute(table.delete())
 
     factory = sessionmaker(bind=db_engine, autoflush=False, expire_on_commit=False)
     import app.services.database as database_module

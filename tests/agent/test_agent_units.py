@@ -126,3 +126,29 @@ def test_eligibility_warranty_12_months() -> None:
 def test_eligibility_unknown_type_rejected() -> None:
     with pytest.raises(ValueError, match="未知售后类型"):
         evaluate_after_sales(_order(), "EXPLODE", utcnow())
+
+
+# --- 确认卡片数据（public_pending）---
+
+
+def test_public_pending_exposes_card_fields_only() -> None:
+    from app.agent.state import make_pending, public_pending
+
+    pending = make_pending(
+        "CREATE_AFTER_SALES_TICKET",
+        {"order_id": "A10001", "category": "REFUND", "title": "P001 售后申请（REFUND）", "description": "内部描述"},
+        pending_id="pa-0123456789abcdef",
+    )
+    card = public_pending(pending)
+    assert card is not None
+    assert set(card) == {"id", "type", "expires_at", "order_id", "category", "title"}
+    assert (card["id"], card["order_id"], card["category"]) == ("pa-0123456789abcdef", "A10001", "REFUND")
+
+
+def test_public_pending_hides_expired_or_missing() -> None:
+    from app.agent.state import make_pending, public_pending
+
+    expired = make_pending("CREATE_AFTER_SALES_TICKET", {"order_id": "A10001"}, pending_id="pa-expired-000001")
+    expired["expires_at"] = (utcnow() - timedelta(seconds=1)).isoformat()
+    assert public_pending(expired) is None
+    assert public_pending(None) is None

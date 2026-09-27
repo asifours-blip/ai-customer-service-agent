@@ -8,6 +8,8 @@ S4 pending 过期与确认竞争（EXPIRED 分支 vs 有效执行）
 S5 跨会话状态污染（B 会话不得执行/泄漏 A 会话的 pending 与实体）
 S6 唯一约束竞争恢复路径（跨用户同 key 不共享工单；同用户同 key 不同请求 → 冲突）
 S7 SUPPORT 并发状态迁移（行锁：只能一方成功，另一方 INVALID_TRANSITION）
+S8 两名 SUPPORT 并发领取同一工单（行锁：只能一方成功，另一方 ALREADY_ASSIGNED）
+S9 同一工单并发提交两次反馈（行锁 + 唯一约束：只能一条，另一方 DUPLICATE）
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from app.agent.service import AgentService
 from app.agent.state import make_pending, save_state_to_conversation
 from app.api.chat import _agent_service
 from app.models.conversation import Conversation
-from app.models.ticket import Ticket
+from app.models.ticket import Ticket, TicketEvent, TicketFeedback
 from app.services import tickets as ticket_service
 from app.tools.ticket import build_registry
 
@@ -366,12 +368,16 @@ def test_s6b_concurrent_same_user_same_key_different_request_conflicts(db, monke
 # ---------- S7：SUPPORT 并发状态迁移 ----------
 
 def test_s7_concurrent_transition_only_one_wins(db, monkeypatch) -> None:
-    """两个 SUPPORT 同时把 OPEN 工单推进到 PROCESSING：只能一方成功，另一方必须 INVALID_TRANSITION。
+    """领取人并发两次把 OPEN 工单推进到 PROCESSING（双击 / 两个标签页）：只能一方成功，另一方 INVALID_TRANSITION。
 
+    阶段 2 起只有领取人能迁移状态，因此先由 SUPPORT001 领取，两个并发请求都以领取人身份发出。
     Barrier 放在「读到状态之后、校验迁移之前」，强制两方都先读再写；
     若读取带行锁，第二方读不到旧状态，Barrier 超时后按串行语义继续。
     """
     from app.services import ticket_state
+
+    with db() as s:
+        ticket_service.claim_ticket(s, "T10001", "SUPPORT001")
 
     n = 2
     read_barrier = threading.Barrier(n, timeout=2)
@@ -386,10 +392,10 @@ def test_s7_concurrent_transition_only_one_wins(db, monkeypatch) -> None:
     outcomes: list[dict] = []
     lock = threading.Lock()
 
-    def worker(i: int) -> None:
+    def worker(_i: int) -> None:
         with db() as s:
             try:
-                t = ticket_service.transition_ticket(s, "T10001", "PROCESSING", f"SUPPORT00{i}")
+                t = ticket_service.transition_ticket(s, "T10001", "PROCESSING", "SUPPORT001")
                 row = {"kind": "ok", "status": t.status}
             except Exception as exc:
                 row = {"kind": getattr(exc, "code", type(exc).__name__)}
@@ -404,3 +410,94 @@ def test_s7_concurrent_transition_only_one_wins(db, monkeypatch) -> None:
     with db() as s:
         ticket = s.get(Ticket, "T10001")
         assert ticket is not None and ticket.status == "PROCESSING"
+        changes = s.scalars(
+            select(TicketEvent).where(TicketEvent.ticket_id == "T10001", TicketEvent.event_type == "STATUS_CHANGED")
+        ).all()
+        assert len(changes) == 1  # 失败的一方不留处理记录
+
+
+# ---------- S8：两名 SUPPORT 并发领取 ----------
+
+def test_s8_concurrent_claim_only_one_wins(db, monkeypatch) -> None:
+    """SUPPORT001 与 SUPPORT002 同时领取未指派的 T10001：只能一方成功，另一方 ALREADY_ASSIGNED。
+
+    Barrier 放在「持锁读到 assignee_id 之后、判断能否领取之前」：没有行锁时两方都会读到 NULL 并各自写入
+    （后写覆盖前写，两方都返回成功）；有行锁时第二方阻塞在 SELECT ... FOR UPDATE，Barrier 超时后串行继续。
+    """
+    n = 2
+    read_barrier = threading.Barrier(n, timeout=2)
+    original = ticket_service.ensure_claimable
+
+    def synchronized(ticket, support_user_id: str) -> None:  # noqa: ANN001
+        with suppress(threading.BrokenBarrierError):
+            read_barrier.wait()
+        original(ticket, support_user_id)
+
+    monkeypatch.setattr(ticket_service, "ensure_claimable", synchronized)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+
+    def worker(support_id: str) -> None:
+        with db() as s:
+            try:
+                t = ticket_service.claim_ticket(s, "T10001", support_id)
+                row = {"kind": "ok", "support": support_id, "assignee": t.assignee_id}
+            except Exception as exc:
+                row = {"kind": getattr(exc, "code", type(exc).__name__), "support": support_id}
+            with lock:
+                outcomes.append(row)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, ["SUPPORT001", "SUPPORT002"]))
+
+    print("\nS8 outcomes:", outcomes)
+    assert sorted(o["kind"] for o in outcomes) == ["ALREADY_ASSIGNED", "ok"], outcomes
+    winner = next(o["support"] for o in outcomes if o["kind"] == "ok")
+    with db() as s:
+        ticket = s.get(Ticket, "T10001")
+        assert ticket is not None and ticket.assignee_id == winner
+        claims = s.scalars(
+            select(TicketEvent).where(TicketEvent.ticket_id == "T10001", TicketEvent.event_type == "CLAIMED")
+        ).all()
+        assert [c.actor_id for c in claims] == [winner]
+
+
+# ---------- S9：同一工单并发提交反馈 ----------
+
+def test_s9_concurrent_feedback_only_one_row(db, monkeypatch) -> None:
+    """客户在两个标签页同时提交反馈：只能写入一条，另一方 DUPLICATE（409）。"""
+    with db() as s:
+        ticket_service.claim_ticket(s, "T10001", "SUPPORT001")
+        ticket_service.transition_ticket(s, "T10001", "PROCESSING", "SUPPORT001")
+        ticket_service.transition_ticket(s, "T10001", "RESOLVED", "SUPPORT001")
+
+    n = 2
+    read_barrier = threading.Barrier(n, timeout=2)
+    original = ticket_service.get_feedback
+
+    def synchronized(session, ticket_id: str):  # noqa: ANN001, ANN202
+        with suppress(threading.BrokenBarrierError):
+            read_barrier.wait()
+        return original(session, ticket_id)
+
+    monkeypatch.setattr(ticket_service, "get_feedback", synchronized)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def worker(rating: int) -> None:
+        with db() as s:
+            try:
+                ticket_service.submit_feedback(s, "T10001", "U001", rating, "并发提交")
+                kind = "ok"
+            except Exception as exc:
+                kind = getattr(exc, "code", type(exc).__name__)
+            with lock:
+                outcomes.append(kind)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, [4, 5]))
+
+    print("\nS9 outcomes:", outcomes)
+    assert sorted(outcomes) == ["DUPLICATE", "ok"], outcomes
+    with db() as s:
+        assert len(s.scalars(select(TicketFeedback).where(TicketFeedback.ticket_id == "T10001")).all()) == 1

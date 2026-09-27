@@ -39,7 +39,21 @@ class AgentService:
         self.tools = tools
         self._graph = build_agent_graph(llm, rag, tools, classifier)
 
-    def handle(self, db: Session, user_id: str, session_id: str, message: str) -> dict[str, Any]:
+    def handle(
+        self,
+        db: Session,
+        user_id: str,
+        session_id: str,
+        message: str,
+        *,
+        decision: str | None = None,
+        expected_pending_id: str | None = None,
+    ) -> dict[str, Any]:
+        """处理一轮对话。
+
+        decision/expected_pending_id 仅由结构化确认入口传入（YES|NO + 卡片上的 pending_action.id）：
+        仍走同一张图的 check_pending → execute_confirmed，幂等键同样取自 pending_action.id。
+        """
         conv = self._get_or_create_conversation(db, user_id, session_id)
         trace_id = uuid4().hex[:20]
         db.add(Message(conversation_id=conv.id, role="user", content=message))
@@ -54,6 +68,8 @@ class AgentService:
             "recent_messages": self._recent_messages(db, conv.id),
             "user_order_ids": [o.id for o in list_orders(db, user_id)],
             "steps_used": 0,
+            "decision": decision,
+            "expected_pending_id": expected_pending_id,
         }
         initial.update(load_state_from_conversation(conv))  # type: ignore[typeddict-item]
 
@@ -125,6 +141,8 @@ class AgentService:
             "prompt_tokens": final_state.get("prompt_tokens", 0) or 0,
             "completion_tokens": final_state.get("completion_tokens", 0) or 0,
             "latency_ms": latency_ms,
+            "eligibility": final_state.get("eligibility"),
+            "pending_action": final_state.get("pending_action"),
         }
 
     def _get_or_create_conversation(self, db: Session, user_id: str, session_id: str) -> Conversation:

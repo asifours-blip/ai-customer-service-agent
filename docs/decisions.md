@@ -62,3 +62,13 @@ router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LO
 **v2（修复真实缺陷）**：按 case 类别构造参考要点（注入/越权/拒答场景写明"正确行为=拒绝"；rag 给整篇 expected_document；其余给种子事实表）；多轮给完整对话链；json_mode；max_tokens 300→1200（v4-pro 是推理模型，reasoning 计入 completion，300 会在输出 JSON 前耗尽 → 4/24 空 content，实测复现）。结果 22/24，κ=0.478。分歧仅剩 mt_001/ord_001 两处 1-vs-2 宽严边界。
 **v3（原则性澄清后停止）**：明确"评分只看事实正确性与完整性，格式（DELIVERED/P001）不扣分；理由必须忠于原文"。ord_001 达成一致，但 mt_003 反向翻为 1 分 → 仍 22/24，κ=0.314。**判定为过拟合信号，停止迭代**。
 **κ 悖论分析**：人工标签 23×2+1×0 的近单一分布下，无权 κ≥0.70 数学上要求 24/24 完全一致（单条 1 分之隔 → κ≈0.65）；mt_001/mt_003 属不同人工标注者之间也未必一致的边界案例。结论：该 gate 在当前校准集上不可诚实达成；按规格执行"κ<0.70 不发布 Judge 指标"，确定性指标（任务成功/权限/注入/RAG 命中等）不依赖 Judge，不受影响。迭代全过程与三轮 judge_scores 保留在 git 历史与 calibration_report 中。
+
+## D-019 工单领取与指派规则（2026-09-28，阶段 2 工作台）
+领取：`POST /api/support/tickets/{id}/claim` 在 `SELECT ... FOR UPDATE` 行锁内判断 `assignee_id`，两名客服并发领取只有一方成功，另一方 409 `ALREADY_ASSIGNED`；本人重复领取幂等返回、不重复记事件。领取只指派不改状态，状态由领取人显式推进。可领取条件为「未指派且未 CLOSED」——新流程下只有 OPEN 会处于未指派，放宽到非 CLOSED 是为了让迁移前遗留的 PROCESSING/RESOLVED 未指派工单仍有人能接手。
+指派人鉴权：状态迁移与客服回复都要求 `assignee_id == 当前客服`（未领取/他人领取 → 403），CLOSED 后双方都不能回复（409 `INVALID_STATE`）。
+**不支持转交**：客服之间自行转交会让责任边界模糊，且需要额外的「被转交方是否接受」语义；当前没有主管角色，暂不开放。若后续需要，建议新增 SUPPORT_LEAD 角色的 reassign 接口（同样走行锁 + 事件记录），而不是让领取人自行释放。
+反馈：RESOLVED/CLOSED 后客户本人可评分一次（1–5 + 评论），重复 409 `DUPLICATE`，不支持修改（评测集需要不可变样本）；行锁串行化 + `ticket_feedback_ticket_id_key` 唯一约束兜底。
+处理记录：`ticket_events` 只追加，与业务写入同事务提交；DB 触发器拒绝 UPDATE/DELETE（测试清库用 TRUNCATE，不触发行级触发器）。客户视图隐藏内部字段：`assignee_id`、客服回复的 `author_id`、客服事件的 `actor_id`。
+
+## D-020 确认卡片复用 graph 确认路径（2026-09-28，阶段 2 工作台）
+原确认入口只有聊天发「确认」（`detect_confirmation` 正则）。新增 `POST /api/chat/confirm {session_id, pending_action_id, decision}` 供前端卡片使用，但**不另写执行路径**：API 只把 decision（YES/NO）和卡片上的 pending id 放进同一张图的初始状态；`check_pending` 先校验该 id 仍是会话当前 pending 且未过期（否则 STALE：不执行、不清除当前 pending），再与文本确认一样进入 `execute_confirmed`（REVALIDATE 权限与资格 → `create_ticket` 以 `pending_action.id` 为幂等键）。会话历史中记录为「确认」/「取消」，与手输一致；卡片与聊天两种入口可以混用，幂等键相同。

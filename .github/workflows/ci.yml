@@ -71,3 +71,5 @@ jobs:
           tests_stress/test_race_conditions.py::test_s6a_concurrent_same_key_different_users_never_share_ticket
           tests_stress/test_race_conditions.py::test_s6b_concurrent_same_user_same_key_different_request_conflicts
           tests_stress/test_race_conditions.py::test_s7_concurrent_transition_only_one_wins
+          tests_stress/test_race_conditions.py::test_s8_concurrent_claim_only_one_wins
+          tests_stress/test_race_conditions.py::test_s9_concurrent_feedback_only_one_row

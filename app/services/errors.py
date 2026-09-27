@@ -53,6 +53,20 @@ class IdempotencyConflictError(AppError):
     http_status = 409
 
 
+class AlreadyAssignedError(AppError):
+    """工单已被其他客服领取：领取只能成功一次。"""
+
+    code = "ALREADY_ASSIGNED"
+    http_status = 409
+
+
+class InvalidStateError(AppError):
+    """当前工单状态不允许该操作（如 CLOSED 后回复、未解决就反馈）。"""
+
+    code = "INVALID_STATE"
+    http_status = 409
+
+
 class ToolExecutionError(AppError):
     code = "TOOL_EXECUTION_FAILED"
     http_status = 500

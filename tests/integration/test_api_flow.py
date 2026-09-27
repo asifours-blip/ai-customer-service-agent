@@ -164,6 +164,8 @@ def test_support_full_lifecycle_and_reverse_blocked(client) -> None:
 
 def test_support_reply_visible_to_customer(client) -> None:
     s = auth_headers(client, "support_agent")
+    # 阶段 2：只有领取人能回复，先领取 T10001（seed 中未指派）
+    assert client.post("/api/support/tickets/T10001/claim", headers=s).status_code == 200
     resp = client.post(
         "/api/support/tickets/T10001/replies", json={"content": "已收到，正在安排检测。"}, headers=s
     )
