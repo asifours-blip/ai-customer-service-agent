@@ -6,6 +6,7 @@ S2 同会话并发重复"确认"（Agent 层，check_pending 消费竞态）
 S3 响应丢失后重试（executor 超时但 INSERT 已 commit）
 S4 pending 过期与确认竞争（EXPIRED 分支 vs 有效执行）
 S5 跨会话状态污染（B 会话不得执行/泄漏 A 会话的 pending 与实体）
+S6 唯一约束竞争恢复路径（跨用户同 key 不共享工单；同用户同 key 不同请求 → 冲突）
 """
 
 from __future__ import annotations
@@ -87,7 +88,8 @@ def test_s1_concurrent_same_key_exactly_one_ticket(db, monkeypatch) -> None:
             try:
                 r = tool.execute(s, U, {
                     "order_id": ORDER, "category": "REFUND",
-                    "title": f"stress-{i}", "idempotency_key": key,
+                    # 同 key 的重放必须是同一份请求；内容不同属于 IDEMPOTENCY_CONFLICT（见 S6b）
+                    "title": "stress-s1", "idempotency_key": key,
                 })
                 with lock:
                     outcomes.append({
@@ -301,3 +303,59 @@ def test_s5_cross_session_no_pending_or_entity_leak(db) -> None:
         conv_a = s.scalar(select(Conversation).where(Conversation.session_id == sid_a))
         assert conv_a is not None
         assert conv_a.pending_action_id == "pa-stress-s5-0001", "B 的操作不应消费/清空 A 的 pending"
+
+
+# ---------- S6：唯一约束竞争的恢复路径也必须按用户隔离、按指纹判冲突 ----------
+
+def _race_creates(db, monkeypatch, requests: list[tuple[str, dict]]) -> list[dict]:
+    """所有请求先都查不到幂等键，分配 ID 后对齐，强制每一方都走到 INSERT/commit。"""
+    n = len(requests)
+    allocation_barrier = threading.Barrier(n)
+    original_next_ticket_id = ticket_service.next_ticket_id
+
+    def synchronized_next_ticket_id(session):
+        ticket_id = original_next_ticket_id(session)
+        allocation_barrier.wait()
+        return ticket_id
+
+    monkeypatch.setattr(ticket_service, "next_ticket_id", synchronized_next_ticket_id)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+
+    def worker(req: tuple[str, dict]) -> None:
+        user_id, fields = req
+        with db() as s:
+            try:
+                ticket, created = ticket_service.create_ticket(s, user_id=user_id, **fields)
+                row = {"user": user_id, "kind": "ok", "ticket": ticket.id, "owner": ticket.user_id,
+                       "created": created}
+            except Exception as exc:
+                row = {"user": user_id, "kind": getattr(exc, "code", type(exc).__name__)}
+            with lock:
+                outcomes.append(row)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, requests))
+    return outcomes
+
+
+def test_s6a_concurrent_same_key_different_users_never_share_ticket(db, monkeypatch) -> None:
+    fields = {"category": "OTHER", "title": "stress-s6a", "idempotency_key": "pa-stress-s6a-0001"}
+    outcomes = _race_creates(db, monkeypatch, [("U001", fields), ("U002", fields)])
+    print("\nS6a outcomes:", outcomes)
+    assert all(o["kind"] == "ok" for o in outcomes), outcomes
+    assert all(o["owner"] == o["user"] for o in outcomes), f"竞争失败方拿到了别人的工单: {outcomes}"
+    assert all(o["created"] for o in outcomes), outcomes
+    assert len({o["ticket"] for o in outcomes}) == 2
+    assert _stress_ticket_count(db, "pa-stress-s6a-%") == 2
+
+
+def test_s6b_concurrent_same_user_same_key_different_request_conflicts(db, monkeypatch) -> None:
+    key = "pa-stress-s6b-0001"
+    outcomes = _race_creates(db, monkeypatch, [
+        ("U001", {"category": "OTHER", "title": "stress-s6b-left", "idempotency_key": key}),
+        ("U001", {"category": "OTHER", "title": "stress-s6b-right", "idempotency_key": key}),
+    ])
+    print("\nS6b outcomes:", outcomes)
+    assert sorted(o["kind"] for o in outcomes) == ["IDEMPOTENCY_CONFLICT", "ok"], outcomes
+    assert _stress_ticket_count(db, "pa-stress-s6b-%") == 1

@@ -46,6 +46,13 @@ class DuplicateError(AppError):
     http_status = 409
 
 
+class IdempotencyConflictError(AppError):
+    """同一用户复用幂等键，但业务内容与首次请求不同：不能当作重放。"""
+
+    code = "IDEMPOTENCY_CONFLICT"
+    http_status = 409
+
+
 class ToolExecutionError(AppError):
     code = "TOOL_EXECUTION_FAILED"
     http_status = 500
