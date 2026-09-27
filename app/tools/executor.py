@@ -27,6 +27,10 @@ from app.tools.base import BaseTool, ToolKind, ToolResult
 
 _RETRYABLE = {"TOOL_EXECUTION_FAILED"}
 _TRANSIENT_BACKOFF_SECONDS = 0.2
+SIDE_EFFECT_TIMEOUT_MESSAGE = (
+    "操作响应超时，结果未知：工单可能已经创建成功。请先在【我的工单】列表中查看确认；"
+    "如确认没有创建，再次回复【确认】即可——重新确认会复用同一个幂等键，不会重复开单。"
+)
 
 
 class ToolExecutor:
@@ -85,10 +89,7 @@ class ToolExecutor:
         except FutureTimeout:
             future.cancel()
             if tool.kind is ToolKind.SIDE_EFFECT:
-                # 写入可能已成功（响应超时≠未写入）：绝不自动重试，引导查证
-                return ToolResult.err(
-                    tool,
-                    "SIDE_EFFECT_TIMEOUT",
-                    "操作已提交但响应超时，结果未知。请先查询确认是否已创建，不要重复提交。",
-                )
+                # 写入可能已成功（响应超时≠未写入）：绝不自动重试，引导查证；
+                # 用户重新确认复用同一 pending_action 派生的幂等键，不会重复开单
+                return ToolResult.err(tool, "SIDE_EFFECT_TIMEOUT", SIDE_EFFECT_TIMEOUT_MESSAGE)
             return ToolResult.err(tool, "TOOL_EXECUTION_FAILED", f"工具执行超时（>{self.timeout}s）")

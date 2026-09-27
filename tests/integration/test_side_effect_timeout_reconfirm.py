@@ -109,7 +109,8 @@ def test_late_commit_then_reconfirm_replays_single_ticket(db, client, agent, gat
     _seed_pending(db, sid, key)
 
     first = _confirm(agent, db, sid)
-    assert "响应超时" in first
+    assert "结果未知" in first and "不会重复开单" in first
+    assert "失败" not in first and "不要重复提交" not in first
     assert _tickets_for(db, key) == []  # 首次执行仍卡在写库之前
     assert _pending_id(db, sid) == key  # 超时不清空 pending：重新确认会复用同一个 key
 
@@ -130,7 +131,8 @@ def test_reconfirm_while_first_attempt_in_flight_single_ticket(db, client, agent
     _seed_pending(db, sid, key)
 
     first = _confirm(agent, db, sid)
-    assert "响应超时" in first
+    assert "结果未知" in first and "不会重复开单" in first
+    assert "失败" not in first and "不要重复提交" not in first
 
     second = _confirm(agent, db, sid)  # 首次执行尚未落库时用户再次确认
     tickets = _tickets_for(db, key)

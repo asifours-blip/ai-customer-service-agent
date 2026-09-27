@@ -301,6 +301,10 @@ def build_agent_graph(
             return {"route": Route.EXECUTE_CONFIRMED, "pending_action": None, "tool_calls": [call_c],
                     "tool_results": [d], "final_answer": answer, "active_order_id": order_id,
                     "active_ticket_id": d.get("ticket_id")}
+        if rc.error and rc.error["type"] == "SIDE_EFFECT_TIMEOUT":
+            # 结果未知≠失败：原样给出查证指引，保留 pending_action 以便用同一幂等键重新确认
+            return {"route": Route.EXECUTE_CONFIRMED, "tool_calls": [call_c], "tool_results": [rc.error],
+                    "final_answer": rc.error["message"]}
         if rc.error and rc.error["type"] == "DUPLICATE":
             return {"route": Route.EXECUTE_CONFIRMED, "pending_action": None, "tool_calls": [call_c],
                     "tool_results": [rc.error], "final_answer": f"{rc.error['message']}，无需重复申请。"}
