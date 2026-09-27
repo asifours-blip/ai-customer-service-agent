@@ -116,3 +116,37 @@ def test_read_only_retry_after_timeout_never_shares_session(db) -> None:
     assert len(in_flight) == 2
     assert in_flight[0] is not in_flight[1], "并发运行的两次尝试共享了同一个 Session"
     assert all(s is not caller for s in in_flight), "工作线程拿到了调用方的 Session"
+
+
+def test_caller_session_stays_usable_after_worker_timeout(db) -> None:
+    """超时后（工作线程仍在运行 / 已迟到提交）调用方 Session 可继续正常读、写、提交。"""
+    tool = _GatedTool(ToolKind.SIDE_EFFECT, _late_create_ticket)
+    ex = ToolExecutor(timeout_seconds=0.2)
+
+    with db() as caller:
+        result = ex.execute(caller, tool, "U001", {})
+        assert result.error is not None and result.error["type"] == "SIDE_EFFECT_TIMEOUT"
+        assert tool.started.acquire(timeout=_WAIT)
+
+        # 工作线程仍阻塞在工具内：调用方读写提交不受影响
+        assert caller.scalar(select(func.count()).select_from(Ticket).where(Ticket.user_id == "U001")) == 1
+        caller.add(Conversation(user_id="U001", session_id="caller-during-worker", title="caller"))
+        caller.commit()
+
+        tool.release.set()
+        assert tool.finished.acquire(timeout=_WAIT)
+
+        # 迟到提交完成后：调用方仍能看到最新已提交数据，并继续写入
+        late = caller.scalar(select(Ticket).where(Ticket.idempotency_key == "pa-late-iso-0001"))
+        assert late is not None and late.user_id == "U001"
+        caller.add(Conversation(user_id="U001", session_id="caller-after-worker", title="caller"))
+        caller.commit()
+
+    with db() as s:
+        sessions = set(
+            s.scalars(
+                select(Conversation.session_id).where(Conversation.session_id.like("caller-%-worker"))
+            )
+        )
+    assert tool.errors == []
+    assert sessions == {"caller-during-worker", "caller-after-worker"}
