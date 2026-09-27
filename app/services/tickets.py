@@ -173,8 +173,12 @@ def list_tickets_for_support(db: Session, status: str | None = None) -> list[Tic
 
 
 def transition_ticket(db: Session, ticket_id: str, target: str, support_user_id: str) -> Ticket:
-    """SUPPORT 专用状态迁移（v1.1 补丁：OPEN→PROCESSING→RESOLVED→CLOSED 单向）。"""
-    ticket = db.get(Ticket, ticket_id)
+    """SUPPORT 专用状态迁移（v1.1 补丁：OPEN→PROCESSING→RESOLVED→CLOSED 单向）。
+
+    SELECT ... FOR UPDATE：并发迁移按行串行化，后到者基于最新状态校验，
+    避免两方都读到旧状态后各自「合法」迁移（双迁移 / 覆盖对方结果）。
+    """
+    ticket = db.get(Ticket, ticket_id, with_for_update=True, populate_existing=True)
     if ticket is None:
         raise NotFoundError(f"工单不存在: {ticket_id}")
     ticket_state.assert_transition(ticket.status, target)

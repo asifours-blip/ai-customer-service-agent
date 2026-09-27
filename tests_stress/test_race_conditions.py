@@ -7,6 +7,7 @@ S3 响应丢失后重试（executor 超时但 INSERT 已 commit）
 S4 pending 过期与确认竞争（EXPIRED 分支 vs 有效执行）
 S5 跨会话状态污染（B 会话不得执行/泄漏 A 会话的 pending 与实体）
 S6 唯一约束竞争恢复路径（跨用户同 key 不共享工单；同用户同 key 不同请求 → 冲突）
+S7 SUPPORT 并发状态迁移（行锁：只能一方成功，另一方 INVALID_TRANSITION）
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -359,3 +361,46 @@ def test_s6b_concurrent_same_user_same_key_different_request_conflicts(db, monke
     print("\nS6b outcomes:", outcomes)
     assert sorted(o["kind"] for o in outcomes) == ["IDEMPOTENCY_CONFLICT", "ok"], outcomes
     assert _stress_ticket_count(db, "pa-stress-s6b-%") == 1
+
+
+# ---------- S7：SUPPORT 并发状态迁移 ----------
+
+def test_s7_concurrent_transition_only_one_wins(db, monkeypatch) -> None:
+    """两个 SUPPORT 同时把 OPEN 工单推进到 PROCESSING：只能一方成功，另一方必须 INVALID_TRANSITION。
+
+    Barrier 放在「读到状态之后、校验迁移之前」，强制两方都先读再写；
+    若读取带行锁，第二方读不到旧状态，Barrier 超时后按串行语义继续。
+    """
+    from app.services import ticket_state
+
+    n = 2
+    read_barrier = threading.Barrier(n, timeout=2)
+    original_assert = ticket_state.assert_transition
+
+    def synchronized_assert(current: str, target: str) -> None:
+        with suppress(threading.BrokenBarrierError):
+            read_barrier.wait()
+        original_assert(current, target)
+
+    monkeypatch.setattr(ticket_state, "assert_transition", synchronized_assert)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+
+    def worker(i: int) -> None:
+        with db() as s:
+            try:
+                t = ticket_service.transition_ticket(s, "T10001", "PROCESSING", f"SUPPORT00{i}")
+                row = {"kind": "ok", "status": t.status}
+            except Exception as exc:
+                row = {"kind": getattr(exc, "code", type(exc).__name__)}
+            with lock:
+                outcomes.append(row)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, range(n)))
+
+    print("\nS7 outcomes:", outcomes)
+    assert sorted(o["kind"] for o in outcomes) == ["INVALID_TRANSITION", "ok"], outcomes
+    with db() as s:
+        ticket = s.get(Ticket, "T10001")
+        assert ticket is not None and ticket.status == "PROCESSING"
