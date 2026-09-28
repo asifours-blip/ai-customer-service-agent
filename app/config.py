@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     retrieval_score_threshold_fake: float = 0.22
     retrieval_score_threshold_bge: float = 0.52
 
+    # --- 知识库版本（D-021）：启动恢复宽限期 ---
+    # 只有创建早于该时长、且无存活连接持有导入锁的 DRAFT/INGESTING 版本才会被标为 FAILED：
+    # 避免多实例时把别的实例刚上传、后台任务尚未取锁的草稿误判为「中断」
+    kb_recover_grace_minutes: int = 10
+
     # --- Cost Guard ---
     max_single_live_eval_cost_usd: float = 1.00  # preflight 预检，--force 可越
     hard_eval_cost_limit_usd: float = 2.00  # 硬闸，任何情况不可越

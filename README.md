@@ -74,7 +74,7 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 - 状态：`DRAFT → INGESTING → READY | FAILED`，`READY → ACTIVE`（发布），原 `ACTIVE → RETIRED`；回滚 = `RETIRED → ACTIVE`。检索只查 ACTIVE 版本。
 - 同一时刻至多一个 ACTIVE：数据库部分唯一索引兜底；发布/回滚在单事务内完成，并以请求携带的 `expected_active_version_id` 做比较交换，并发发布只有一个成功（另一方 409）。
 - 上传后后台导入，READY 之前自动检查 chunk 数量、向量维度，并跑 `kb_smoke_queries.yaml` 冒烟查询（每题必须命中指定文档且过拒答阈值）；任一不过即 FAILED 并写明原因，不影响当前生效版本。
-- 进程重启：没有存活连接持有导入锁的 DRAFT/INGESTING 版本在启动时被标为 FAILED。
+- 进程重启：创建已超过宽限期（`KB_RECOVER_GRACE_MINUTES`，默认 10 分钟）且没有存活连接持有导入锁的 DRAFT/INGESTING 版本，在启动时被标为 FAILED。
 - 回答引用记录 `(version_id, chunk_id)`；旧版本只退役不删除，`GET /api/traces/{trace_id}/citations` 与聊天里的「查看引用原文」始终能取回当时的原文。
 - 启动：只有没有任何 ACTIVE 版本时才把 `knowledge_base/` 导入为初始版本并生效（`scripts/bootstrap_kb.py`），否则什么都不做。
 

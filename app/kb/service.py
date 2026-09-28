@@ -2,7 +2,8 @@
 
 并发与原子性（D-021）：
 - 导入：每个版本导入期间持有事务级 advisory lock (KB_INGEST_LOCK, version_id)。进程崩溃 → 连接断开 →
-  锁自动释放；重启恢复只把「拿得到锁」的 DRAFT/INGESTING 标为 FAILED，不会误伤其他存活进程正在导入的版本。
+  锁自动释放；重启恢复只把「创建已超过宽限期 且 拿得到锁」的 DRAFT/INGESTING 标为 FAILED：
+  不误伤其他存活进程正在导入的版本，也不误伤别的实例刚上传、后台任务还没来得及取锁的草稿。
 - 发布/回滚：单事务内完成「旧 ACTIVE → RETIRED、目标 → ACTIVE、写审计」。事务先取全局 advisory lock 串行化，
   再做比较交换（调用方给出它看到的生效版本 expected_active_version_id，不一致即 409），
   所以并发发布只有一个成功；部分唯一索引 uq_kb_versions_single_active 在数据库层兜底「至多一个 ACTIVE」。
@@ -15,6 +16,7 @@ import logging
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -327,13 +329,24 @@ def ingest_version(factory: SessionFactory, version_id: int, retrieval: Retrieva
         lock_session.close()  # 回滚持锁事务 → 释放 advisory lock
 
 
-def recover_interrupted(factory: SessionFactory) -> list[int]:
-    """启动时调用：DRAFT/INGESTING 且没有任何存活连接持有导入锁的版本 → FAILED。"""
+def recover_interrupted(factory: SessionFactory, *, grace: timedelta | None = None) -> list[int]:
+    """启动时调用：DRAFT/INGESTING、创建早于宽限期、且没有任何存活连接持有导入锁的版本 → FAILED。
+
+    grace 默认取配置 KB_RECOVER_GRACE_MINUTES（10 分钟）。
+    """
+    if grace is None:
+        from app.config import get_settings
+
+        grace = timedelta(minutes=get_settings().kb_recover_grace_minutes)
+    cutoff = utcnow() - grace
     recovered: list[int] = []
     with factory() as db:
         ids = db.scalars(
             select(KbVersion.id)
-            .where(KbVersion.status.in_((KB_STATUS_DRAFT, KB_STATUS_INGESTING)))
+            .where(
+                KbVersion.status.in_((KB_STATUS_DRAFT, KB_STATUS_INGESTING)),
+                KbVersion.created_at < cutoff,
+            )
             .order_by(KbVersion.id)
         ).all()
         for vid in ids:

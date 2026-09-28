@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -331,6 +332,16 @@ def _draft(db) -> int:  # noqa: ANN001
         return create_draft(s, docs, source="UPLOAD", actor="KBADMIN001").id
 
 
+def _age(db, vid: int, minutes: int = 11) -> None:  # noqa: ANN001
+    """把版本创建时间调到 N 分钟前（默认超过 10 分钟宽限期）。"""
+    with db() as s:
+        s.execute(
+            text("UPDATE kb_versions SET created_at = now() - make_interval(mins => :m) WHERE id = :id"),
+            {"m": minutes, "id": vid},
+        )
+        s.commit()
+
+
 def merge_with_active_docs(db):  # noqa: ANN001, ANN201
     docs = validate_documents([UploadedFile("policy-tradein.md", TRADEIN_MD)])
     with db() as s:
@@ -364,12 +375,14 @@ def test_killed_ingest_process_is_recovered_as_failed(db) -> None:  # noqa: ANN0
             assert proc.poll() is None, "导入子进程提前退出"
             assert time.monotonic() < deadline, "子进程 30s 内未进入 INGESTING"
             time.sleep(0.2)
-        assert recover_interrupted(db) == []  # 子进程仍持有导入锁：不误伤
+        _age(db, vid)
+        assert recover_interrupted(db) == []  # 即使超过宽限期，子进程仍持有导入锁：不误伤
         assert status_of(db, vid) == "INGESTING"
     finally:
         proc.kill()
         proc.wait(timeout=10)
 
+    _age(db, vid)  # 超过宽限期：只有「无人持锁 + 足够旧」的才会被标失败
     deadline = time.monotonic() + 30
     recovered: list[int] = []
     while not recovered:  # 数据库发现连接断开并释放锁需要一点时间
@@ -394,12 +407,16 @@ def test_app_startup_recovers_stale_ingesting_versions(db) -> None:  # noqa: ANN
     with db() as s:
         s.execute(text("UPDATE kb_versions SET status = 'INGESTING' WHERE id = :id"), {"id": stale_ingesting})
         s.commit()
+    _age(db, stale_ingesting)
+    _age(db, stale_draft)
+    fresh_draft = _draft_third(db)  # 刚上传、后台任务可能还没取锁：宽限期内不动
     from app.main import app
 
     with TestClient(app):  # 触发 lifespan 启动钩子 = 进程启动
         pass
     assert status_of(db, stale_ingesting) == "FAILED"
     assert status_of(db, stale_draft) == "FAILED"
+    assert status_of(db, fresh_draft) == "DRAFT"
     assert status_of(db, 1) == "ACTIVE"
 
 
@@ -409,8 +426,42 @@ def _draft_other(db) -> int:  # noqa: ANN001
         return create_draft(s, merge_with_active(s, docs), source="UPLOAD", actor="KBADMIN001").id
 
 
+def _draft_third(db) -> int:  # noqa: ANN001
+    docs = validate_documents([UploadedFile("policy-tradein.md", TRADEIN_MD.replace(b"80 ", b"60 "))])
+    with db() as s:
+        return create_draft(s, merge_with_active(s, docs), source="UPLOAD", actor="KBADMIN001").id
+
+
+def test_recovery_grace_period_spares_fresh_drafts(db) -> None:  # noqa: ANN001
+    """宽限期（默认 10 分钟）内的 DRAFT/INGESTING 不标失败：可能是别的实例刚上传、后台任务还没来得及取锁。"""
+    fresh, old_draft, old_ingesting = _draft(db), _draft_other(db), _draft_third(db)
+    with db() as s:
+        s.execute(text("UPDATE kb_versions SET status = 'INGESTING' WHERE id = :id"), {"id": old_ingesting})
+        s.commit()
+    _age(db, old_draft, minutes=11)
+    _age(db, old_ingesting, minutes=11)
+    _age(db, fresh, minutes=9)  # 仍在默认 10 分钟宽限期内
+
+    assert recover_interrupted(db) == [old_draft, old_ingesting]
+    statuses = (status_of(db, fresh), status_of(db, old_draft), status_of(db, old_ingesting))
+    assert statuses == ("DRAFT", "FAILED", "FAILED")
+
+    # 阈值可配置：缩短到 5 分钟后，9 分钟前的 DRAFT 也被恢复
+    assert recover_interrupted(db, grace=timedelta(minutes=5)) == [fresh]
+    assert status_of(db, fresh) == "FAILED"
+
+
+def test_recovery_grace_defaults_to_ten_minutes_from_settings(monkeypatch) -> None:  # noqa: ANN001
+    from app.config import Settings
+
+    assert Settings().kb_recover_grace_minutes == 10
+    monkeypatch.setenv("KB_RECOVER_GRACE_MINUTES", "3")
+    assert Settings().kb_recover_grace_minutes == 3
+
+
 def test_recovered_version_is_not_ingested_later(db) -> None:  # noqa: ANN001
     vid = _draft(db)
+    _age(db, vid)
     assert recover_interrupted(db) == [vid]
     assert ingest_version(db, vid, retrieval()) == "FAILED"  # 已被标记失败的版本不会再被导入
     with db() as s:
