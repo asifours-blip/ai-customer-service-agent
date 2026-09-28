@@ -55,7 +55,13 @@ class RagService:
         # None = 检索当前 ACTIVE 版本（线上）；评测可固定到指定版本
         self.version_id = version_id
 
-    def answer(self, db: Session, query: str, *, top_k: int = 5) -> RagAnswer:
+    def answer(self, db: Session, query: str, *, top_k: int = 5, generate: bool = True) -> RagAnswer:
+        """检索 → 拒答判定 → （可选）生成。
+
+        generate=False 时只做检索与拒答判定、返回命中来源，不调用 LLM 生成正文——
+        供只需要「是否命中知识库 + 引用来源」、不需要生成文本的调用方使用（如售后节点的
+        政策引用），避免为丢弃不用的生成结果付费。
+        """
         query_vector = self.embedder.embed_query(query)
         # 维度与版本记录不一致时 store.search 抛 KbRebuildRequiredError：拒绝检索，不给出错位的结果
         hits = store.search(db, query_vector, top_k=top_k, version_id=self.version_id)
@@ -65,13 +71,6 @@ class RagService:
         if not hits or top_score < self.score_threshold:
             return RagAnswer(answer=ABSTAIN_MESSAGE, abstained=True, retrieval=retrieval)
 
-        context_blocks = [
-            f"【{h.document_name} · {h.section}】\n{h.content}" for h in hits
-        ]
-        user_prompt = (
-            "知识库内容：\n" + "\n\n".join(context_blocks) + f"\n\n用户问题：{query}\n请依据上述知识库回答。"
-        )
-        resp = self.llm.complete(SYSTEM_PROMPT, user_prompt)
         # 引用记录 (version_id, chunk_id)：版本发布/回滚后仍能按版本取回当时的原文
         sources = [
             {
@@ -82,6 +81,16 @@ class RagService:
             }
             for h in hits
         ]
+        if not generate:
+            return RagAnswer(answer="", sources=sources, abstained=False, retrieval=retrieval)
+
+        context_blocks = [
+            f"【{h.document_name} · {h.section}】\n{h.content}" for h in hits
+        ]
+        user_prompt = (
+            "知识库内容：\n" + "\n\n".join(context_blocks) + f"\n\n用户问题：{query}\n请依据上述知识库回答。"
+        )
+        resp = self.llm.complete(SYSTEM_PROMPT, user_prompt)
         return RagAnswer(
             answer=resp.content,
             sources=sources,

@@ -223,7 +223,9 @@ def build_agent_graph(
 
         order = svc_get_order(db, order_id, state["user_id"])
         elig = evaluate_after_sales(order, req_type, utcnow())
-        policy = rag.answer(db, _POLICY_QUERY[req_type])
+        # 这里只需要「是否命中政策文档 + 引用来源」，生成的正文用不到（下面只拼固定文案），
+        # 用 generate=False 跳过 LLM 生成，避免多付一次生成调用的钱（结果反正会被丢弃）
+        policy = rag.answer(db, _POLICY_QUERY[req_type], generate=False)
         policy_text = "（详见售后政策）" if policy.abstained else ""
         det = elig.details
         if elig.eligible:

@@ -99,6 +99,29 @@ def test_after_sales_beyond_window_no_ticket(client) -> None:
     assert "确认" not in resp.json()["answer"]
 
 
+def test_after_sales_eligible_does_not_waste_a_generation_call(client) -> None:
+    """售后资格判定只需要政策命中与引用来源，不该为丢弃不用的生成结果计费（回归：曾经多打一次 RAG 生成）。
+
+    Trace 里的 llm_calls 记录每一次真实发出的 LLM 调用（成功/失败都记，见 app/llm/client.py）。
+    离线测试用规则分类器（RuleBasedIntentClassifier），不经过 LLM；因此符合条件的售后请求
+    在修复后应产生 0 次 LLM 调用——之前会多出 1 次（node_after_sales 里为拿引用调用
+    rag.answer() 触发的生成，其正文从未被使用）。
+    """
+    headers = auth_headers(client, "demo_customer")
+    resp = client.post(
+        "/api/chat",
+        json={"session_id": "s-aftersales-callcount", "message": "A10001 买的耳机用了三天坏了，可以退款吗"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "符合申请条件" in body["answer"]
+    trace_resp = client.get(f"/api/traces/{body['trace_id']}", headers=headers)
+    assert trace_resp.status_code == 200, trace_resp.text
+    llm_calls = trace_resp.json()["llm_calls"] or []
+    assert len(llm_calls) == 0, f"售后资格判定不应触发任何 LLM 生成调用，实际 {len(llm_calls)} 次：{llm_calls}"
+
+
 def test_after_sales_no_cancel(client) -> None:
     s = "s-cancel"
     r1 = _chat(client, "A10001 耳机有问题想退款", session=s)

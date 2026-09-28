@@ -38,6 +38,9 @@ jobs:
       - run: pip install -e ".[dev,rag-local]"
       - name: Migrate eval database
         run: DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head
+      - name: Generate ephemeral JWT secret
+        # 启动校验拒绝默认/空 JWT_SECRET；此密钥只在本次 job 运行期间存在，不落盘、不写死。
+        run: echo "JWT_SECRET=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
       - name: Run live evaluation with cost guard
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
