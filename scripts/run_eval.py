@@ -174,7 +174,7 @@ def run(mode: str, force: bool, kb_spec: str) -> int:
         picked = build_calibration_set(results)
         judge = LLMJudge(agent.llm)
         judge_items = []
-        judge_prompt = judge_completion = 0
+        judge_prompt = judge_completion = judge_unknown = 0
         for r in picked:
             case = case_by_id[r["case_id"]]
             s = judge.score(
@@ -183,6 +183,7 @@ def run(mode: str, force: bool, kb_spec: str) -> int:
             judge_items.append({"case_id": r["case_id"], **s})
             judge_prompt += int(s.get("judge_prompt_tokens", 0))
             judge_completion += int(s.get("judge_completion_tokens", 0))
+            judge_unknown += int(bool(s.get("judge_usage_unknown")))
         (CALIB_DIR / "judge_scores.json").write_text(
             json.dumps({"items": judge_items}, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -206,6 +207,9 @@ def run(mode: str, force: bool, kb_spec: str) -> int:
         completion_tokens = sum(
             int(t.get("completion_tokens", 0) or 0) for r in results for t in r["turns"]
         )
+        unknown_calls = judge_unknown + sum(
+            int(t.get("usage_unknown_calls", 0) or 0) for r in results for t in r["turns"]
+        )
         payload["cost"] = reconcile_actual(
             pricing,
             agent_model="deepseek-v4-flash",
@@ -215,6 +219,7 @@ def run(mode: str, force: bool, kb_spec: str) -> int:
             judge_prompt_tokens=judge_prompt,
             judge_completion_tokens=judge_completion,
             estimate=payload["cost"],
+            usage_unknown_calls=unknown_calls,
         )
     else:
         payload["cost_note"] = "离线模式：FakeLLM/FakeEmbedding，零 API 费用"

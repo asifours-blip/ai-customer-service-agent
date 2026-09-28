@@ -149,6 +149,9 @@ def run_case(agent: AgentService, db: Session, case: dict[str, Any]) -> dict[str
                 "latency_ms": r.get("latency_ms", 0),
                 "prompt_tokens": r.get("prompt_tokens", 0) or 0,
                 "completion_tokens": r.get("completion_tokens", 0) or 0,
+                # 其中 usage 未知（接口没返回 / 读超时 / 响应中断）的调用数：它们的 token 已按上限计入上面两项
+                "usage_unknown_calls": r.get("usage_unknown_calls", 0) or 0,
+                "answer_mode": r.get("answer_mode"),
             }
         )
     final = turn_results[-1]
