@@ -123,7 +123,10 @@ class KbChunk(Base):
 
 
 class KbAuditLog(Base):
-    """知识库操作审计：上传、导入开始/完成/失败、发布、退役、回滚、重启恢复。"""
+    """知识库操作审计：上传、导入开始/完成/失败、发布、退役、回滚、重启恢复。
+
+    只追加：DB 触发器 kb_audit_log_no_update_delete 拒绝 UPDATE / DELETE（迁移 a6c3e8b2d417）。
+    """
 
     __tablename__ = "kb_audit_log"
 

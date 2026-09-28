@@ -6,6 +6,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from tests.conftest import ROOT, TEST_DATABASE_URL
 from tests.integration.test_kb_versions import TRADEIN_MD, new_version
@@ -79,5 +80,48 @@ def test_migration_on_empty_kb_creates_no_active_version(db, db_engine) -> None:
         with db_engine.connect() as conn:
             # 空知识库不建空的 ACTIVE 版本：否则启动初始化会因「已有生效版本」跳过，线上一直为空
             assert conn.execute(text("SELECT count(*) FROM kb_versions")).scalar() == 0
+    finally:
+        command.upgrade(cfg, "head")
+
+
+# ---------------------------------------------------------------- 审计只追加（DB 触发器）
+
+AUDIT_REVISION_PREVIOUS = "f5a9c2e7d104"
+
+
+def _has_audit_trigger(conn) -> bool:  # noqa: ANN001
+    return bool(conn.execute(text("SELECT 1 FROM pg_trigger WHERE tgname = 'kb_audit_log_no_update_delete'")).scalar())
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["UPDATE kb_audit_log SET actor = 'tampered'", "DELETE FROM kb_audit_log"],
+    ids=["update", "delete"],
+)
+def test_kb_audit_log_is_append_only(db, db_engine, statement: str) -> None:  # noqa: ANN001
+    with db_engine.connect() as conn:
+        before = conn.execute(text("SELECT id, action, actor FROM kb_audit_log ORDER BY id")).all()
+    assert before, "夹具初始化应已写入审计记录"
+    with pytest.raises(DBAPIError, match="kb_audit_log is append-only"), db_engine.begin() as conn:
+        conn.execute(text(statement))
+    with db_engine.connect() as conn:
+        assert conn.execute(text("SELECT id, action, actor FROM kb_audit_log ORDER BY id")).all() == before
+        # 追加仍然允许
+        conn.execute(text("INSERT INTO kb_audit_log (version_id, action, actor, created_at) "
+                          "VALUES (1, 'NOTE', 'test', now())"))
+        conn.rollback()
+
+
+def test_kb_audit_trigger_migration_round_trip(db, db_engine) -> None:  # noqa: ANN001
+    cfg = _alembic_config()
+    try:
+        command.downgrade(cfg, AUDIT_REVISION_PREVIOUS)
+        with db_engine.connect() as conn:
+            assert not _has_audit_trigger(conn)
+            conn.execute(text("UPDATE kb_audit_log SET actor = actor"))  # 降级后不再拦截
+            conn.rollback()
+        command.upgrade(cfg, "head")
+        with db_engine.connect() as conn:
+            assert _has_audit_trigger(conn)
     finally:
         command.upgrade(cfg, "head")
