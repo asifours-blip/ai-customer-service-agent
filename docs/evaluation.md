@@ -56,6 +56,9 @@
 
 ```bash
 docker compose up -d db
+# 评测会清空业务表：必须指定独立评测库（库名以 _eval 或 _test 结尾、且不同于 DATABASE_URL），否则拒绝运行
+export EVAL_DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_eval
+DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head                   # 评测库首次使用前迁移（库需先建好）
 EMBEDDING_BACKEND=bge python scripts/run_eval.py              # 离线全量（零 API 费）
 EMBEDDING_BACKEND=bge NO_PAID_API=false python scripts/run_eval.py --live   # 真实评测（需 .env key）
 python scripts/run_eval.py --calibrate eval/calibration       # κ 校准

@@ -481,8 +481,12 @@ def test_non_admin_gets_403_on_every_kb_endpoint(db, client: TestClient, usernam
 # ---------------------------------------------------------------- 评测重置
 
 
-def test_eval_reset_keeps_kb_and_resolves_directory_version(db) -> None:  # noqa: ANN001
+def test_eval_reset_keeps_kb_and_resolves_directory_version(db, monkeypatch) -> None:  # noqa: ANN001
     from eval.runner import reset_environment, resolve_kb_version
+
+    # 评测库守卫：本用例中测试库扮演「独立评测库」，应用库另指一个名字
+    monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL.rsplit("/", 1)[0] + "/agent_cs")
+    monkeypatch.setenv("EVAL_DATABASE_URL", TEST_DATABASE_URL)
 
     v2 = new_version(db, {"policy-tradein.md": TRADEIN_MD})
     activate(db, v2.id, expected=1)

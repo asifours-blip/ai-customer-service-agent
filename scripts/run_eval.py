@@ -9,6 +9,10 @@
   python scripts/run_eval.py --calibrate CALIBRATION_DIR  # κ 校准
                                              #   （需 blind_labeled.json[来自live] + judge_scores.json）
 
+评测库（必需）：EVAL_DATABASE_URL 指向独立的评测库（库名以 _eval 或 _test 结尾，且不能与 DATABASE_URL 同库），
+  评测会清空其中的业务表；未设置或不合规时拒绝运行、不删除任何数据（eval/safety.py）。
+  首次使用前先迁移：DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head
+
 知识库版本（D-021）：--kb-version dir（默认）| active | 版本号
   dir    ：复用与 knowledge_base/ 目录内容、向量后端都一致的已校验版本，没有则导入一个新版本（只导入不发布）
   active ：当前线上生效版本；版本号：指定版本（READY / ACTIVE / RETIRED）
@@ -34,8 +38,23 @@ from eval.loader import load_dataset  # noqa: E402
 from eval.metrics import compute_all  # noqa: E402
 from eval.report import new_payload, write_reports  # noqa: E402
 from eval.runner import reset_environment, run_all  # noqa: E402
+from eval.safety import EvalDatabaseRefused, resolve_eval_database  # noqa: E402
 
 CALIB_DIR = ROOT / "eval" / "calibration"
+
+
+def bind_eval_database() -> bool:
+    """校验 EVAL_DATABASE_URL，并把全局会话工厂改绑到评测库（seed、检索、工具调用都走它）。"""
+    try:
+        eval_url = resolve_eval_database(os.environ)
+    except EvalDatabaseRefused as exc:
+        print(f"拒绝运行评测：{exc}")
+        return False
+    from app.services import database
+
+    database.SessionLocal.configure(bind=database._engine_for(eval_url))
+    print(f"评测库：{database.SessionLocal.kw['bind'].url.render_as_string(hide_password=True)}")
+    return True
 
 
 def eval_retrieval():
@@ -308,6 +327,8 @@ def main() -> int:
     if needs_key and os.environ.get("NO_PAID_API", "true").lower() == "true":
         print("live/rejudge 需要 NO_PAID_API=false 与 DEEPSEEK_API_KEY 环境变量")
         return 2
+    if (args.export_blind or not (args.rejudge or args.calibrate)) and not bind_eval_database():
+        return 2  # 会重置业务表的命令：先过评测库守卫，任何数据库操作之前
     if args.export_blind:
         return export_blind_cmd(args.kb_version)
     if args.rejudge:

@@ -82,4 +82,5 @@ router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LO
 检索与引用：`store.search` 默认只 join ACTIVE 版本；引用来源增加 `version_id`，`GET /api/traces/{id}/citations` 按 `(version_id, chunk_id)` 取回原文（版本 RETIRED 仍可查）；版本化之前的旧 trace 没有版本号，接口如实返回「无法追溯」，不按 chunk_id 猜。
 向量后端：聊天检索、后台导入、启动初始化统一用 `serving_retrieval()`（离线开关下固定 FakeEmbedding），版本记录 `embedding_backend`，发布时与当前服务不一致则拒绝，评测时与评测 embedder 不一致也拒绝。
 启动与评测：entrypoint 改为 `bootstrap_kb.py`，仅在没有 ACTIVE 时导入 `knowledge_base/` 并生效（失败则容器启动失败）。`run_eval.py --kb-version dir|active|N`：dir 复用内容哈希与后端都一致的已校验版本、没有则导入新版本但不发布；评测检索固定在所选版本。评测重置只 TRUNCATE 业务表，知识库四张表不在范围内（顺带修复：原逐表 DELETE 会被 ticket_events 的只追加触发器拒绝）。
+评测库守卫（阶段 3 审阅后追加）：评测会清空业务表，目标库只读自 `EVAL_DATABASE_URL`；未设置、与 `DATABASE_URL` 同库（规范化 host/port/dbname 后比较：主机不分大小写、localhost≡127.0.0.1≡::1、缺省端口 5432，与驱动名和用户名无关）、或库名不以 `_eval`/`_test` 结尾，一律拒绝运行且不连接任何库；CLI 通过后把全局会话工厂改绑到评测库。`reset_environment` 自身再校验一次「会话实际连接的库 = 通过守卫的评测库」，绕过 CLI 直接调用也删不到应用库。
 权限：新角色 KB_ADMIN（种子 `kb_admin`），`/api/kb/*` 全部仅限该角色，客户与客服 403。

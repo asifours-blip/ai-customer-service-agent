@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,9 +30,13 @@ def reset_environment(db: Session) -> None:
     """清空业务数据（用户/订单/工单/会话/Trace 等）→ seed。知识库表不动。
 
     一条 TRUNCATE 覆盖全部业务表：不触发 ticket_events 的只追加行级触发器，也不需要按外键顺序逐表删除。
+    执行前校验：会话连接的必须是通过守卫的独立评测库（EVAL_DATABASE_URL），否则一行都不删（eval.safety）。
     """
     from app.models import Base
+    from eval.safety import ensure_eval_target
     from scripts.seed_db import seed
+
+    ensure_eval_target(db.get_bind().engine.url, os.environ)
 
     tables = [t.name for t in Base.metadata.sorted_tables if t.name not in KB_TABLES]
     db.execute(text("TRUNCATE TABLE " + ", ".join(f'"{name}"' for name in tables)))
