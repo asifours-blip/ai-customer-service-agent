@@ -1,6 +1,6 @@
 # 系统架构
 
-> 本文回答"这个项目由什么组成、为什么这样分层"。决策细节见 `docs/decisions.md`（D-001 ~ D-021），本文只述结论与位置。
+> 本文说明组成与分层。决策细节见 [设计决策](decisions.md)，完整运行命令与历史验证见 [详细参考](reference.md)。
 
 ## 一句话
 
@@ -16,7 +16,7 @@
 | Agent | LangGraph | 8 意图受控路由，`MAX_AGENT_STEPS=8` |
 | LLM | DeepSeek（OpenAI 兼容） | agent=deepseek-v4-flash；评测 judge=deepseek-v4-pro；离线用确定性 FakeLLM |
 | Embedding | BAAI/bge-small-zh-v1.5（本地） | 512 维；CI 用零依赖 FakeEmbedding（bigram hash） |
-| 测试 | pytest（分层）+ ruff + mypy(strict) | 183 个测试：纯单测（Mock 仓库）+ 真实 PG 集成测试 |
+| 测试 | pytest（分层）+ ruff + mypy(strict) | 纯单测与真实 PG 集成、指定并发回归；当前范围见 [CI](../.github/workflows/ci.yml)，早期文档的 183 项是旧计数，不代表当前套件 |
 | CI | GitHub Actions | ci.yml 全离线零付费；live-eval.yml 仅手动触发 |
 
 ## 模块分层
@@ -46,7 +46,7 @@ scripts/            seed_db / bootstrap_kb（仅无生效版本时初始化知�
 
 1. **LLM 不拥有业务权限**（D 系核心红线）：LLM 只做理解/规划/解释；事实、权限、资格、副作用全部在确定性业务代码（PermissionService / EligibilityService / 工具层）。Guardrails 只是软防线，工具层硬校验才是安全边界。
 2. **状态落库**：AgentSessionState（active_order/ticket/product、pending_action 及其 id/expires_at）持久化在 Conversation 表，服务重启后确认流可恢复。
-3. **副作用幂等**：create_ticket 由 pending_action_id 派生 idempotency_key + DB UNIQUE；重复确认返回首张工单而非重复创建（实例见 `docs/demo.md` Demo4）。
+3. **副作用幂等**：create_ticket 由 pending_action_id 派生 idempotency_key；数据库 UNIQUE 约束 `(user_id, idempotency_key)`，正常命中与冲突恢复均校验请求指纹。同一用户的相同请求返回原工单，内容不同返回 409；不同用户的同名键互不影响（见 [回归](../tests/integration/test_ticket_idempotency_scope.py)）。
 4. **两层 LLM 替身**：Fake（CI/离线，零付费、确定性）与真实 DeepSeek（live 评测/演示）共用 LLMClient 协议；Embedding 同理（Fake/BGE），由环境变量切换。
 5. **可复现**：所有指标数字可由仓库产物重算——评测报告内嵌全部逐 case 结果，报告快照提交入库。
 
@@ -63,6 +63,6 @@ docker compose up --build      # db(pgvector) + backend：entrypoint 依次执�
 
 ## 数据模型要点
 
-- **Ticket**：状态机 OPEN→PROCESSING→RESOLVED→CLOSED（禁逆向，support 端点强制）；`idempotency_key` UNIQUE。
+- **Ticket**：状态机 OPEN→PROCESSING→RESOLVED→CLOSED；领取、状态迁移和回复锁定同一工单行，客服写操作要求当前领取人。`(user_id, idempotency_key)` UNIQUE，`request_fingerprint` 区分合法重放与内容冲突。
 - **AgentTrace**：每次请求记录 query/intent/route/retrieval(top_score/top_k)/tool 调用+幂等键/tokens/latency/error_type/final_answer/policy_version 与 business_rule_version——`trace_id` 可完整复盘（演示台右侧面板直连）。
 - **Conversation**：含会话状态持久化字段（见原则 2）。
