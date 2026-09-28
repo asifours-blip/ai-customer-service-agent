@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+import sys
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -44,7 +44,8 @@ def _version_lock() -> Iterator[None]:
     CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
     with (CONVERTED_DIR / ".versions.lock").open("a+b") as stream:
         stream.seek(0)
-        if os.name == "nt":
+        # 用 sys.platform 分支：mypy 能按平台收窄，Linux CI 不会检查 msvcrt、Windows 不会检查 fcntl
+        if sys.platform == "win32":
             import msvcrt
 
             msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
@@ -56,11 +57,11 @@ def _version_lock() -> Iterator[None]:
         else:
             import fcntl
 
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def _digest(data: bytes) -> str:
