@@ -75,9 +75,9 @@ def db(db_engine):
         # 知识库表重置自增序列：每个用例的初始版本都是 v1，断言与失败信息更易读
         conn.execute(text("TRUNCATE TABLE kb_audit_log, kb_chunks, kb_documents, kb_versions RESTART IDENTITY"))
         for table in reversed(Base.metadata.sorted_tables):
-            if table.name == "ticket_events":
+            if table.name in ("ticket_events", "feedback_review_audit"):
                 # 只追加表：行级触发器拒绝 DELETE；TRUNCATE 不触发行级触发器，仅测试清库使用
-                conn.execute(text("TRUNCATE TABLE ticket_events"))
+                conn.execute(text(f"TRUNCATE TABLE {table.name}"))
             else:
                 conn.execute(table.delete())
 

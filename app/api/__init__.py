@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api import auth, chat, conversations, kb, orders, support, system, tickets, traces
+from app.api import auth, chat, conversations, feedback, kb, orders, support, system, tickets, traces
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -14,3 +14,4 @@ api_router.include_router(support.router, prefix="/support", tags=["support"])
 api_router.include_router(traces.router, prefix="/traces", tags=["traces"])
 api_router.include_router(kb.router, prefix="/kb", tags=["knowledge-base"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])
+api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])

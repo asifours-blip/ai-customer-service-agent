@@ -280,3 +280,53 @@ class CitationOut(BaseModel):
     version_status: str | None = None
     content: str | None = None
     reason: str | None = None
+
+
+# --- 回答反馈与审核 ---
+
+
+class AnswerFeedbackCreate(BaseModel):
+    helpful: bool
+    note: str = Field(default="", max_length=2000)
+
+
+class AnswerFeedbackOut(ORMModel):
+    id: int
+    message_id: int
+    user_id: str
+    helpful: bool
+    note: str | None
+    review_status: str
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    created_at: datetime
+
+
+class FeedbackQueueItemOut(BaseModel):
+    """管理员审核队列条目：问题、回答、引用、知识库版本、trace 一次性给全。"""
+
+    feedback: AnswerFeedbackOut
+    question: str | None
+    answer: str | None
+    trace_id: str | None
+    route: str | None
+    citations: list[CitationOut] = []
+    kb_version_ids: list[int] = []
+
+
+class FeedbackConvertRequest(BaseModel):
+    """驳回不需要额外字段；转评测用例必须给期望结果与期望引用，字段对齐 eval/loader.py。"""
+
+    expected_outcome: str = Field(pattern="^(SUCCESS|REFUSED|BLOCKED|CLARIFY|NOT_FOUND|DUPLICATE)$")
+    expected_document: str | None = Field(default=None, max_length=128)
+    category: str = Field(default="rag", max_length=32)
+    note: str = Field(default="", max_length=500)
+
+
+class FeedbackReviewAuditOut(BaseModel):
+    id: int
+    feedback_id: int
+    action: str
+    actor: str
+    detail: dict[str, Any] | None
+    created_at: datetime
