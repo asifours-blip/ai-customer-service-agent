@@ -12,9 +12,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.llm.client import LLMClient
+from app.llm.client import ANSWER_MODE_TEMPLATE, LLMClient, answer_mode_of
 from app.rag import store
 from app.rag.embedding import EmbeddingClient
+from app.rag.store import KbRebuildRequiredError, ensure_dimension_matches
+
+__all__ = ["ABSTAIN_MESSAGE", "KbRebuildRequiredError", "RagAnswer", "RagService", "ensure_dimension_matches"]
 
 ABSTAIN_MESSAGE = "当前知识库中没有足够信息回答这个问题。"
 
@@ -33,6 +36,8 @@ class RagAnswer:
     model: str = ""
     usage_prompt_tokens: int = 0
     usage_completion_tokens: int = 0
+    # 回答方式：拒答是模板；生成走 LLM 客户端声明的方式（真实模型 MODEL / 离线回显 OFFLINE_ECHO）
+    answer_mode: str = ANSWER_MODE_TEMPLATE
 
 
 class RagService:
@@ -52,6 +57,7 @@ class RagService:
 
     def answer(self, db: Session, query: str, *, top_k: int = 5) -> RagAnswer:
         query_vector = self.embedder.embed_query(query)
+        # 维度与版本记录不一致时 store.search 抛 KbRebuildRequiredError：拒绝检索，不给出错位的结果
         hits = store.search(db, query_vector, top_k=top_k, version_id=self.version_id)
         top_score = hits[0].score if hits else 0.0
         retrieval = {"top_score": top_score, "top_k": len(hits)}
@@ -84,4 +90,5 @@ class RagService:
             model=resp.model,
             usage_prompt_tokens=resp.usage.prompt_tokens,
             usage_completion_tokens=resp.usage.completion_tokens,
+            answer_mode=answer_mode_of(self.llm),
         )
