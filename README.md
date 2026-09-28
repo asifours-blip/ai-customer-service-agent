@@ -89,6 +89,22 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 | `support_agent2` | 客服 SUPPORT002 | 第二名客服（领取竞争） |
 | `kb_admin` | 知识库管理员 KBADMIN001 | 上传 / 发布 / 回滚知识库版本（`#/kb`） |
 
+### 反馈进评测、部署与恢复（`feat/feedback-eval-ops`）
+
+三档现状，如实分开（代码写完 ≠ 隔离测试通过 ≠ 真实联调通过）：
+
+**已实现且隔离验证通过的（真实 PostgreSQL 集成测试 / 本机真实 Docker 演练，非模拟）：**
+- 回答反馈：客户对每条 assistant 回答标「有帮助/没帮助」（`POST /api/feedback/{message_id}`），同一用户对同一条回答只能提交一次（唯一约束兜底）；SUPPORT 角色的审核队列（`GET /api/feedback/admin/queue`）一次性给出问题、回答、RAG 引用、知识库版本、trace_id；审核动作写进只追加的 `feedback_review_audit`（DB 触发器拒绝 UPDATE/DELETE，与 `kb_audit_log`/`ticket_events` 同做法）。见 `tests/integration/test_answer_feedback.py`。
+- 转评测用例：审核通过把用例写进独立的、带版本号的数据文件 `eval/datasets/converted/v1.jsonl`，字段对齐 `eval/loader.py`；固定 110 条数据集（`eval/datasets/*.jsonl`）分毫不动，测试里逐行断言过。
+- 知识库版本对比：`scripts/run_kb_diff.py` 复用评测执行器，让同一组样本分别在版本 A/B 上跑，输出逐题差异报告；本机真实跑过一次（详见 `docs/evaluation.md`「知识库版本对比」）。
+- 售后节点不再多打一次白付费的 RAG 生成调用（`app/rag/answerer.py` 的 `generate=False`），回归测试直接查 Trace 断言 LLM 调用次数为 0（此前是 1）。
+- `live-eval.yml` 的 `JWT_SECRET` 改成每次运行随机生成，不再写死/缺失导致启动校验拒绝。
+- 备份恢复：`scripts/backup.sh` / `scripts/restore.sh`（pg_dump/pg_restore 自定义格式）在本机对真实 Docker Postgres 完整演练过一次——造出会话/引用/待确认操作/已确认工单/多个知识库版本（含 RETIRED）/已领取工单等完整状态，备份、另起临时容器恢复、应用连上验证：引用能取回原文、待确认操作仍可确认且复用幂等键不重复开单、`ticket_events` 的只追加触发器恢复后仍生效、已确认会话「重启」后再发确认不产生第二张工单。完整记录见 `docs/backup-restore-drill.md`；`alembic check` 对恢复后的库无漂移。
+
+**需要真实 key 才能验证的：** 无新增（反馈/审核/评测对比/备份恢复均离线可跑；真实 LLM 相关行为沿用既有 D-022 结论）。
+
+**最小接入配置：** 与主线一致，见下方「真实模型接入」；反馈与知识库对比功能不需要额外配置。
+
 ## 开发
 
 ```bash
@@ -143,6 +159,7 @@ python scripts/run_eval.py --calibrate eval/calibration                 # κ 校
 | [docs/evaluation.md](docs/evaluation.md) | 评测方法论、全部真实数字、κ 校准史、成本对账 |
 | [docs/demo.md](docs/demo.md) | 六个 Demo 操作手册 + 截图 + 答疑要点 |
 | [docs/ticket-concurrency-case-study.md](docs/ticket-concurrency-case-study.md) | PostgreSQL 并发下定位 Ticket ID 竞态、最小修复与 CI 回归 |
+| [docs/backup-restore-drill.md](docs/backup-restore-drill.md) | 备份恢复演练：真实命令、真实输出、四项验收点逐条核对 |
 | [docs/decisions.md](docs/decisions.md) | D-001 ~ D-021 全部工程决策（含踩坑与理由） |
 | [docs/spec.md](docs/spec.md) | 三方合并规格（唯一事实源） |
 
