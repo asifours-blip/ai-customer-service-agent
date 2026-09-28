@@ -118,6 +118,10 @@ export TEST_DATABASE_URL=$DATABASE_URL
 python -m pytest tests_e2e -v                  # 加 --headed 可看浏览器操作
 ```
 
+### 真实模型接入（NO_PAID_API=false）
+
+离线与真实模式是同一套代码，只替换 LLM 客户端。`NO_PAID_API=false` 时启动即校验 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（公网须 https）、`MODEL_NAME`、非默认 `JWT_SECRET`，缺一项拒绝启动。模型调用失败按类别（未配置 / 鉴权 / 限流 / 5xx / 超时 / 连接 / 中断 / 坏响应 / 截断 / 过滤）返回用户可读提示，不回退到模板答案；只重试 429、5xx、连接失败与连接超时，读超时与响应中断不重试并按上限计费。每条回答标注回答方式（模型生成 / 离线回显 / 模板回复），Trace 记录每次模型调用。管理员可在 `GET /api/system/config` 查看配置状态（只显示 key 是否已设置）。BGE 默认从官方源加载；需要镜像时显式设置 `HF_ENDPOINT`，也可用 `BGE_MODEL_PATH` + `HF_HUB_OFFLINE=1` 纯本地加载。详见 `docs/decisions.md` D-022。
+
 ## 评测复现
 
 ```bash

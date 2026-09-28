@@ -84,3 +84,16 @@ router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LO
 启动与评测：entrypoint 改为 `bootstrap_kb.py`，仅在没有 ACTIVE 时导入 `knowledge_base/` 并生效（失败则容器启动失败）。`run_eval.py --kb-version dir|active|N`：dir 复用内容哈希与后端都一致的已校验版本、没有则导入新版本但不发布；评测检索固定在所选版本。评测重置只 TRUNCATE 业务表，知识库四张表不在范围内（顺带修复：原逐表 DELETE 会被 ticket_events 的只追加触发器拒绝）。
 评测库守卫（阶段 3 审阅后追加）：评测会清空业务表，目标库只读自 `EVAL_DATABASE_URL`；未设置、与 `DATABASE_URL` 同库（规范化 host/port/dbname 后比较：主机不分大小写、localhost≡127.0.0.1≡::1、缺省端口 5432，与驱动名和用户名无关）、或库名不以 `_eval`/`_test` 结尾，一律拒绝运行且不连接任何库；CLI 通过后把全局会话工厂改绑到评测库。`reset_environment` 自身再校验一次「会话实际连接的库 = 通过守卫的评测库」，绕过 CLI 直接调用也删不到应用库。
 权限：新角色 KB_ADMIN（种子 `kb_admin`），`/api/kb/*` 全部仅限该角色，客户与客服 403。
+
+## D-022 外部接口准备：错误分类、重试、usage 未知与配置状态（2026-09-28，阶段 4）
+核查现状：离线模式下意图分类是规则（`RuleBasedIntentClassifier`，线上从未接 LLM 分类器）；订单/物流/工单/售后/澄清/转人工/拒答全是确定性模板；只有 RAG 生成与寒暄经过 LLM，而离线 LLM 是 `FakeLLMClient`——把 user prompt（RAG 下即检索到的知识库原文）截断回显，并非生成。此前这些回答在界面上与模型回答没有区别。`NO_PAID_API=false` 但缺 key 时，`DeepseekClient.complete()` 抛 `ValidationFailedError`，被 `AgentService` 的通用兜底吞成「系统内部出现异常」（HTTP 200），不发请求但也不说明原因。
+决策：
+- **同一套代码**：真实模式只替换 LLM 客户端，Agent 图、RagService、Trace 落库完全共用；`DeepseekClient` 通过注入 `http_client`/`sleep` 用本地替身测试，不另写「真实模式流程」。
+- **异常层级**（`app/llm/errors.py`）：未配置 / 鉴权 401·403 / 限流 429 / 服务端 5xx / 其他 4xx / 连接超时（含 TLS 握手）/ 连接失败 / 读超时 / 响应中断 / 坏响应（非 JSON、缺字段、类型不对、未知 finish_reason）/ 截断（length）/ 过滤（content_filter）。上下文含状态码、请求 id、Retry-After、attempts、usage；消息由客户端拼写，**不回显上游响应体**（服务商 401 文案常带部分 key），异常 `from None` 不链接 httpx 原始异常；key 以 `SecretStr` 保存，配置对象被打印也只显示 `**********`。
+- **重试**：只重试 429 / 5xx / 连接失败 / 连接超时（请求未被处理，重发不重复计费）；指数退避 `LLM_RETRY_BASE_SECONDS·2^(n-1)`（封顶 `LLM_RETRY_MAX_SECONDS`），有 Retry-After 至少等它，超过 `LLM_RETRY_AFTER_MAX_SECONDS` 直接失败（不阻塞请求线程）；次数 `LLM_MAX_RETRIES`。读超时、响应中断、写到一半断开**不重试**：请求可能已被处理并计费。
+- **usage 未知按上限计**：`LLMUsage.status` = reported / unknown / none。接口没返回 usage、读超时、响应中断、200 但无法解析时记 unknown，token 取上限：输入 ≤ UTF-8 字节数 + 32（字节级 BPE 的 token 数不超过字节数）、输出 ≤ max_tokens。Trace 的 prompt/completion_tokens 改为各次调用记录之和（计费口径），评测 `reconcile_actual` 沿用 token 求和并单独报告 `usage_unknown_calls`；judge 调用失败也按同一规则记账。顺带修正：售后节点为取政策而调用的 RAG 生成此前不计入 Trace token，现按调用记录计入。
+- **缺配置不回退**：`NO_PAID_API=false` 时 `get_settings()` 一次列出全部缺口（key、base_url 合法且公网必须 https、MODEL_NAME、非默认 JWT_SECRET）并拒绝启动；运行期客户端仍自检，缺配置抛 `LLMNotConfiguredError`、0 请求。聊天接口对模型失败 / 知识库需重建返回 503（`detail.type`=MODEL_NOT_CONFIGURED / MODEL_CALL_FAILED / KB_REBUILD_REQUIRED + `category` + `trace_id`，message 为用户可读提示），不改用模板或回显答案；该轮消息与 Trace 照常落库（answer_mode=ERROR）。不经过模型的工具路由不受影响。
+- **回答方式标识**：离线的回显与模板是既定设计，保留，但每条回答带 `answer_mode`（MODEL / OFFLINE_ECHO / TEMPLATE / ERROR），存入 Trace，前端逐条显示，刷新后从 Trace 取回。
+- **配置状态**：`GET /api/system/config`（仅 KB_ADMIN，项目里唯一的管理员角色）与启动日志共用 `config_status()`：模型名、base_url 主机、key 是否已设置、NO_PAID_API、实际生效/配置的 embedding 后端、BGE 是否就绪（只读检查，不加载模型、不联网）。
+- **BGE 接线**：删除默认 `HF_ENDPOINT=hf-mirror.com`（第三方镜像的供应链风险），仅当 `HF_ENDPOINT` 显式配置（含 .env）时在导入 huggingface_hub 前写入进程环境；`BGE_MODEL_PATH` 指定本地目录时只从该目录加载（`local_files_only`），目录不存在或不完整明确报错、不下载；`HF_HUB_OFFLINE` 时缓存缺失同样明确报错。检索前比对查询向量维度与版本导入时记录的维度（`checks.embedding_dim`，旧版本以列宽 512 为准），不一致抛 `KB_REBUILD_REQUIRED` 拒绝检索。
+Trace：`agent_traces` 新增 `llm_calls`（JSON，每次调用的 outcome、耗时、attempts/retries、usage、状态码、请求 id）与 `answer_mode`（迁移 b7d2f4e9c813，旧记录为 NULL，不回填）。

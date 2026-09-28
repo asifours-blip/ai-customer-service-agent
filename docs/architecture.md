@@ -31,7 +31,7 @@ app/
 ├── services/       业务事实与规则：PermissionService、EligibilityService(policy/rules.yaml)、
 │                   database、errors
 ├── security/       guardrails 提示注入检测（软防线；硬防线在工具层权限校验）
-├── llm/            LLMClient 协议 + FakeLLMClient + DeepseekClient（NO_PAID_API 策略闸）
+├── llm/            LLMClient 协议 + FakeLLMClient + DeepseekClient（NO_PAID_API 策略闸、错误分类与重试，D-022）
 ├── kb/             知识库版本：上传校验 / 后台导入与校验 / 发布·回滚（比较交换）/ 重启恢复 / 引用追溯（D-021）
 ├── models/         User/Product/Order/Logistics/Ticket/TicketReply/KbVersion/KbDocument/KbChunk/KbAuditLog/
 │                   Conversation(AgentSessionState 持久化字段)/Message/AgentTrace
