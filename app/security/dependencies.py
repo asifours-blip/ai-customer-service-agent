@@ -9,7 +9,7 @@ from app.models.user import User
 from app.security.auth import decode_access_token
 from app.services.database import get_db
 from app.services.errors import AuthenticationError, PermissionDeniedError
-from app.services.permission import ROLE_CUSTOMER, ROLE_SUPPORT
+from app.services.permission import ROLE_CUSTOMER, ROLE_KB_ADMIN, ROLE_SUPPORT
 
 
 def _extract_bearer(request: Request) -> str:
@@ -38,4 +38,11 @@ def get_customer_user(user: User = Depends(get_current_user)) -> User:
     """客户工单接口仅限 CUSTOMER：客服不能冒充客户回复、提交反馈或建单。"""
     if user.role != ROLE_CUSTOMER:
         raise PermissionDeniedError("该操作仅限 CUSTOMER 角色")
+    return user
+
+
+def get_kb_admin_user(user: User = Depends(get_current_user)) -> User:
+    """知识库管理接口仅限 KB_ADMIN：客户与客服都不能上传、发布或回滚知识库。"""
+    if user.role != ROLE_KB_ADMIN:
+        raise PermissionDeniedError("该操作仅限 KB_ADMIN（知识库管理员）角色")
     return user

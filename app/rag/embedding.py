@@ -45,6 +45,8 @@ def _bigrams(text: str) -> list[str]:
 class FakeEmbedding:
     """确定性字符 bigram 哈希嵌入（离线/CI）。"""
 
+    backend = "fake"
+
     def __init__(self, dim: int = FAKE_DIM) -> None:
         self.dim = dim
 
@@ -65,6 +67,8 @@ class FakeEmbedding:
 
 class LocalBGEEmbedding:
     """本地 BAAI/bge-small-zh-v1.5（需要 [rag-local] 可选依赖组）。"""
+
+    backend = "bge"
 
     def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5") -> None:
         import os
@@ -99,3 +103,29 @@ def get_embedding_client(backend: str, bge_model_name: str) -> EmbeddingClient:
     if backend == "bge":
         return LocalBGEEmbedding(bge_model_name)
     raise ValueError(f"未知 embedding backend: {backend}（可选 fake | bge）")
+
+
+def backend_name(embedder: EmbeddingClient) -> str:
+    """向量后端名，记录到知识库版本上：不同后端的向量不可混用检索。"""
+    return str(getattr(embedder, "backend", type(embedder).__name__))
+
+
+def serving_retrieval() -> tuple[EmbeddingClient, float]:
+    """在线服务使用的 (embedder, 拒答阈值)。
+
+    聊天检索、管理员上传的后台导入、启动初始化必须用同一个 embedder：
+    版本内的向量与查询向量来自同一后端，冒烟检查的结论才对线上成立。
+    离线开关（NO_PAID_API=true，默认）固定 FakeEmbedding，与原 /api/chat 行为一致。
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    if settings.no_paid_api:
+        return FakeEmbedding(), settings.retrieval_score_threshold_fake
+    embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
+    threshold = (
+        settings.retrieval_score_threshold_bge
+        if settings.embedding_backend == "bge"
+        else settings.retrieval_score_threshold_fake
+    )
+    return embedder, threshold

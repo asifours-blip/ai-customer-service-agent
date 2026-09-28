@@ -209,3 +209,70 @@ class ChatResponse(BaseModel):
     # 售后资格判定依据（EligibilityService 确定性结果）与待确认操作
     eligibility: dict[str, Any] | None = None
     pending_action: PendingActionOut | None = None
+
+
+# --- 知识库版本（D-021）---
+class KbVersionOut(ORMModel):
+    id: int
+    status: str
+    source: str
+    source_hash: str
+    note: str | None
+    created_by: str
+    embedding_backend: str | None
+    doc_count: int
+    chunk_count: int | None
+    progress_done: int
+    progress_total: int
+    failure_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+    activated_at: datetime | None
+
+
+class KbVersionListOut(BaseModel):
+    active_version_id: int | None
+    versions: list[KbVersionOut]
+
+
+class KbDocumentOut(ORMModel):
+    path: str
+    document_id: str
+    document_name: str
+    content_hash: str
+    size_bytes: int
+
+
+class KbAuditOut(ORMModel):
+    id: int
+    version_id: int
+    action: str
+    actor: str
+    from_status: str | None
+    to_status: str | None
+    detail: dict[str, Any] | None
+    created_at: datetime
+
+
+class KbVersionDetailOut(KbVersionOut):
+    checks: dict[str, Any] | None = None
+    documents: list[KbDocumentOut] = []
+    audit: list[KbAuditOut] = []
+
+
+class KbPublishRequest(BaseModel):
+    """比较交换：调用方必须给出它看到的当前生效版本（没有则 null），与实际不一致返回 409。"""
+
+    expected_active_version_id: int | None
+
+
+class CitationOut(BaseModel):
+    document: str | None
+    section: str | None
+    chunk_id: str | None
+    version_id: int | None
+    found: bool
+    version_status: str | None = None
+    content: str | None = None
+    reason: str | None = None

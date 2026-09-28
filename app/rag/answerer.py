@@ -36,14 +36,23 @@ class RagAnswer:
 
 
 class RagService:
-    def __init__(self, embedder: EmbeddingClient, llm: LLMClient, *, score_threshold: float = 0.22) -> None:
+    def __init__(
+        self,
+        embedder: EmbeddingClient,
+        llm: LLMClient,
+        *,
+        score_threshold: float = 0.22,
+        version_id: int | None = None,
+    ) -> None:
         self.embedder = embedder
         self.llm = llm
         self.score_threshold = score_threshold
+        # None = 检索当前 ACTIVE 版本（线上）；评测可固定到指定版本
+        self.version_id = version_id
 
     def answer(self, db: Session, query: str, *, top_k: int = 5) -> RagAnswer:
         query_vector = self.embedder.embed_query(query)
-        hits = store.search(db, query_vector, top_k=top_k)
+        hits = store.search(db, query_vector, top_k=top_k, version_id=self.version_id)
         top_score = hits[0].score if hits else 0.0
         retrieval = {"top_score": top_score, "top_k": len(hits)}
 
@@ -57,8 +66,14 @@ class RagService:
             "知识库内容：\n" + "\n\n".join(context_blocks) + f"\n\n用户问题：{query}\n请依据上述知识库回答。"
         )
         resp = self.llm.complete(SYSTEM_PROMPT, user_prompt)
+        # 引用记录 (version_id, chunk_id)：版本发布/回滚后仍能按版本取回当时的原文
         sources = [
-            {"document": h.document_name, "section": h.section, "chunk_id": h.chunk_id}
+            {
+                "document": h.document_name,
+                "section": h.section,
+                "chunk_id": h.chunk_id,
+                "version_id": str(h.version_id),
+            }
             for h in hits
         ]
         return RagAnswer(

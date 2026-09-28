@@ -2,7 +2,7 @@
 
 from app.models.base import Base
 from app.models.conversation import Conversation, Message
-from app.models.knowledge import KbChunk
+from app.models.knowledge import KbAuditLog, KbChunk, KbDocument, KbVersion
 from app.models.logistics import Logistics
 from app.models.order import Order
 from app.models.product import Product
@@ -23,5 +23,8 @@ __all__ = [
     "Conversation",
     "Message",
     "AgentTrace",
+    "KbVersion",
+    "KbDocument",
     "KbChunk",
+    "KbAuditLog",
 ]

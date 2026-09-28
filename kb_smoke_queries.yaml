@@ -1,0 +1,21 @@
+# 知识库版本冒烟查询集（D-021）
+# 每个新版本在 READY 之前逐题检索「该版本」：expect_document_id 必须出现在 top_k 内，
+# 且分数达到线上拒答阈值（fake 0.22 / bge 0.52），否则版本判 FAILED 并写明哪一题没命中。
+# 删除或改名这里引用的文档会让新版本无法 READY——这是有意的：它们是线上高频问题的底线。
+# 选题依据：fake 后端下各题期望文档分数均 ≥ 0.27（离阈值有余量）；bge 后端尚未在本机实测。
+top_k: 3
+queries:
+  - query: 耳机整机保修多久
+    expect_document_id: doc-policy-warranty
+  - query: 退款多久能到账
+    expect_document_id: doc-policy-refund
+  - query: 售后申请的处理流程
+    expect_document_id: doc-policy-aftersales
+  - query: 人工客服工作时间
+    expect_document_id: doc-policy-service-rule
+  - query: AirMusic Pro 降噪怎么开启
+    expect_document_id: doc-p001
+  - query: PulseWatch 2 支持哪些健康监测
+    expect_document_id: doc-p002
+  - query: 耳机充电盒指示灯含义
+    expect_document_id: doc-faq-001

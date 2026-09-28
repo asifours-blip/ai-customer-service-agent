@@ -1,4 +1,4 @@
-"""用户与角色。role: CUSTOMER | SUPPORT（规格 §4）。"""
+"""用户与角色。role: CUSTOMER | SUPPORT（规格 §4）| KB_ADMIN（知识库管理员，D-021）。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,6 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(16), primary_key=True)  # U001 / SUPPORT001
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(128), nullable=False)
-    role: Mapped[str] = mapped_column(String(16), nullable=False)  # CUSTOMER | SUPPORT
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # CUSTOMER | SUPPORT | KB_ADMIN
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

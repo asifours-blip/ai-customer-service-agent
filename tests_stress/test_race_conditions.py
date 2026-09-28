@@ -10,6 +10,7 @@ S6 唯一约束竞争恢复路径（跨用户同 key 不共享工单；同用户
 S7 SUPPORT 并发状态迁移（行锁：只能一方成功，另一方 INVALID_TRANSITION）
 S8 两名 SUPPORT 并发领取同一工单（行锁：只能一方成功，另一方 ALREADY_ASSIGNED）
 S9 同一工单并发提交两次反馈（行锁 + 唯一约束：只能一条，另一方 DUPLICATE）
+S10 知识库多版本并发发布/回滚（比较交换 + 部分唯一索引：每轮只有一个成功，任意时刻恰好一个 ACTIVE）
 """
 
 from __future__ import annotations
@@ -501,3 +502,65 @@ def test_s9_concurrent_feedback_only_one_row(db, monkeypatch) -> None:
     assert sorted(outcomes) == ["DUPLICATE", "ok"], outcomes
     with db() as s:
         assert len(s.scalars(select(TicketFeedback).where(TicketFeedback.ticket_id == "T10001")).all()) == 1
+
+
+# ---------- S10：知识库并发发布 / 回滚 ----------
+
+def test_s10_concurrent_kb_publish_single_active(db) -> None:
+    """多名管理员同时发布不同版本（夹杂回滚）：每轮恰好一个成功；
+
+    读线程全程观察到恰好一个 ACTIVE、检索结果只来自一个版本。
+    """
+    from app.kb.service import KbConflictError, publish
+    from app.models.knowledge import KbVersion
+    from app.rag import FakeEmbedding, search
+    from tests.integration.test_kb_versions import TRADEIN_MD, new_version
+
+    for i in range(5):
+        v = new_version(db, {"policy-tradein.md": TRADEIN_MD.replace(b"80 ", f"{81 + i} ".encode())})
+        assert v.status == "READY"
+
+    stop = threading.Event()
+    violations: list[str] = []
+    qv = FakeEmbedding().embed_query("耳机整机保修多久")
+
+    def reader() -> None:
+        while not stop.is_set():
+            with db() as s:
+                active = s.scalars(select(KbVersion.id).where(KbVersion.status == "ACTIVE")).all()
+                versions = {h.version_id for h in search(s, qv, 5)}
+            if len(active) != 1 or len(versions) != 1:
+                violations.append(f"active={active} hit_versions={versions}")
+
+    watcher = threading.Thread(target=reader)
+    watcher.start()
+    try:
+        for _round in range(4):
+            with db() as s:
+                rows = s.execute(select(KbVersion.id, KbVersion.status).order_by(KbVersion.id)).all()
+            current = next(vid for vid, st in rows if st == "ACTIVE")
+            candidates = [(vid, st == "RETIRED") for vid, st in rows if st in ("READY", "RETIRED")]
+            barrier = threading.Barrier(len(candidates), timeout=10)
+            outcomes: list[str] = []
+            lock = threading.Lock()
+
+            def worker(vid: int, rollback: bool, current: int = current, barrier: threading.Barrier = barrier,
+                       outcomes: list[str] = outcomes, lock: threading.Lock = lock) -> None:
+                barrier.wait()
+                with db() as s:
+                    try:
+                        publish(s, vid, actor="KBADMIN001", expected_active_version_id=current, rollback=rollback)
+                        kind = "ok"
+                    except KbConflictError as exc:
+                        kind = exc.code
+                with lock:
+                    outcomes.append(kind)
+
+            with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+                list(pool.map(lambda c: worker(*c), candidates))
+            print(f"S10 round {_round}: {len(candidates)} 并发 → {sorted(outcomes)}")
+            assert sorted(outcomes) == ["KB_CONFLICT"] * (len(candidates) - 1) + ["ok"], outcomes
+    finally:
+        stop.set()
+        watcher.join(timeout=10)
+    assert violations == [], violations[:5]

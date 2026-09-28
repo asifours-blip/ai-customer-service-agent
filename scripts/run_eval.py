@@ -8,6 +8,11 @@
   python scripts/run_eval.py --rejudge       # Judge v2 迭代：重评 live 冻结答案（需 key）
   python scripts/run_eval.py --calibrate CALIBRATION_DIR  # κ 校准
                                              #   （需 blind_labeled.json[来自live] + judge_scores.json）
+
+知识库版本（D-021）：--kb-version dir（默认）| active | 版本号
+  dir    ：复用与 knowledge_base/ 目录内容、向量后端都一致的已校验版本，没有则导入一个新版本（只导入不发布）
+  active ：当前线上生效版本；版本号：指定版本（READY / ACTIVE / RETIRED）
+评测前只重置业务数据（用户/订单/工单/会话/Trace），知识库表不动，线上生效版本不受影响。
 """
 
 from __future__ import annotations
@@ -33,38 +38,54 @@ from eval.runner import reset_environment, run_all  # noqa: E402
 CALIB_DIR = ROOT / "eval" / "calibration"
 
 
-def build_agent(live: bool):
-    from app.agent.service import AgentService
+def eval_retrieval():
+    """评测检索配置：Embedding 尊重 EMBEDDING_BACKEND（离线 bge 本地免费，D-002/D-015），阈值随后端。"""
     from app.config import get_settings
-    from app.llm.client import FakeLLMClient
-    from app.rag.answerer import RagService
     from app.rag.embedding import get_embedding_client
-    from app.tools import build_registry
 
     settings = get_settings()
+    embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
+    threshold = (
+        settings.retrieval_score_threshold_bge
+        if settings.embedding_backend == "bge"
+        else settings.retrieval_score_threshold_fake
+    )
+    return embedder, threshold
+
+
+def select_kb_version(spec: str):
+    """确定被评测的知识库版本；不合法（不存在/状态不对/后端不一致）时返回 None 并打印原因。"""
+    from eval.runner import resolve_kb_version
+
+    embedder, threshold = eval_retrieval()
+    try:
+        version = resolve_kb_version(spec, embedder, threshold)
+    except (ValueError, RuntimeError) as exc:
+        print(f"知识库版本不可评测：{exc}")
+        return None
+    print(f"评测知识库版本 v{version.id}（{version.status}，source_hash={version.source_hash[:12]}）")
+    return version
+
+
+def build_agent(live: bool, kb_version_id: int):
+    from app.agent.service import AgentService
+    from app.llm.client import FakeLLMClient
+    from app.rag.answerer import RagService
+    from app.tools import build_registry
+
     if live:
         from app.llm.deepseek import DeepseekClient
 
         llm = DeepseekClient()
-        embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
-        threshold = (
-            settings.retrieval_score_threshold_bge
-            if settings.embedding_backend == "bge"
-            else settings.retrieval_score_threshold_fake
-        )
     else:
-        llm = FakeLLMClient()
-        # 离线评测：LLM 走 Fake（零付费），Embedding 尊重 EMBEDDING_BACKEND（bge 本地免费，D-002）
-        embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
-        threshold = (
-            settings.retrieval_score_threshold_bge
-            if settings.embedding_backend == "bge"
-            else settings.retrieval_score_threshold_fake
-        )
-    return AgentService(llm, RagService(embedder, llm, score_threshold=threshold), build_registry())
+        llm = FakeLLMClient()  # 离线评测：LLM 走 Fake（零付费）
+    embedder, threshold = eval_retrieval()
+    # 检索固定在被评测版本上，不跟随线上 ACTIVE 切换
+    rag = RagService(embedder, llm, score_threshold=threshold, version_id=kb_version_id)
+    return AgentService(llm, rag, build_registry())
 
 
-def run(mode: str, force: bool) -> int:
+def run(mode: str, force: bool, kb_spec: str) -> int:
     cases = load_dataset()
     chat_calls = sum(len(c.get("turns") or [1]) for c in cases)
     pricing = load_pricing()
@@ -93,14 +114,16 @@ def run(mode: str, force: bool) -> int:
 
     from app.services.database import SessionLocal
 
-    agent = build_agent(live=(mode == "live"))
+    version = select_kb_version(kb_spec)
+    if version is None:
+        return 2
+    agent = build_agent(live=(mode == "live"), kb_version_id=version.id)
     from app.config import get_settings as _gs
-    from app.rag.embedding import get_embedding_client as _gec
 
     db = SessionLocal()
     try:
-        print("重置评测环境（truncate → seed → ingest）...")
-        reset_environment(db, _gec(_gs().embedding_backend, _gs().bge_model_name))
+        print("重置评测业务数据（truncate 业务表 → seed；知识库表不动）...")
+        reset_environment(db)
         print(f"运行 {len(cases)} 个 case（mode={mode}）...")
         results = run_all(agent, db, cases)
     finally:
@@ -113,6 +136,7 @@ def run(mode: str, force: bool) -> int:
     payload["environment"] = {
         "llm": "deepseek-v4-flash" if mode == "live" else "fake-llm（确定性）",
         "embedding": _gs().embedding_backend,
+        "kb_version": {"id": version.id, "status": version.status, "source_hash": version.source_hash},
         "note": (
             "真实 API"
             if mode == "live"
@@ -191,11 +215,14 @@ def run(mode: str, force: bool) -> int:
     return 0
 
 
-def export_blind_cmd() -> int:
+def export_blind_cmd(kb_spec: str) -> int:
     from app.services.database import SessionLocal
 
     cases = load_dataset()
-    agent = build_agent(live=False)
+    version = select_kb_version(kb_spec)
+    if version is None:
+        return 2
+    agent = build_agent(live=False, kb_version_id=version.id)
     db = SessionLocal()
     try:
         reset_environment(db)
@@ -272,6 +299,9 @@ def main() -> int:
         "--rejudge", action="store_true", help="Judge v2 迭代：重评 live 冻结答案（需 key + NO_PAID_API=false）"
     )
     parser.add_argument("--calibrate", type=Path, default=None)
+    parser.add_argument(
+        "--kb-version", default="dir", help="评测的知识库版本：dir（默认，与 knowledge_base/ 一致）| active | 版本号"
+    )
     args = parser.parse_args()
 
     needs_key = args.live or args.rejudge
@@ -279,12 +309,12 @@ def main() -> int:
         print("live/rejudge 需要 NO_PAID_API=false 与 DEEPSEEK_API_KEY 环境变量")
         return 2
     if args.export_blind:
-        return export_blind_cmd()
+        return export_blind_cmd(args.kb_version)
     if args.rejudge:
         return rejudge_cmd()
     if args.calibrate:
         return calibrate_cmd(args.calibrate)
-    return run(mode="live" if args.live else "offline", force=args.force)
+    return run(mode="live" if args.live else "offline", force=args.force, kb_spec=args.kb_version)
 
 
 if __name__ == "__main__":

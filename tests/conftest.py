@@ -64,12 +64,16 @@ def db_engine():
 
 @pytest.fixture()
 def db(db_engine):
-    """函数级：清表 → 种子 → 知识库摄取（Fake）。返回测试库会话工厂。"""
+    """函数级：清表 → 种子 → 知识库初始化（knowledge_base/ 导入为 v1 并生效，Fake）。返回测试库会话工厂。"""
+    from app.kb.service import Retrieval, bootstrap_from_directory
+    from app.kb.smoke import load_smoke_config
     from app.models import Base
-    from app.rag import FakeEmbedding, chunk_corpus, load_corpus, rebuild_index
+    from app.rag import FakeEmbedding
     from scripts.seed_db import seed
 
     with db_engine.begin() as conn:
+        # 知识库表重置自增序列：每个用例的初始版本都是 v1，断言与失败信息更易读
+        conn.execute(text("TRUNCATE TABLE kb_audit_log, kb_chunks, kb_documents, kb_versions RESTART IDENTITY"))
         for table in reversed(Base.metadata.sorted_tables):
             if table.name == "ticket_events":
                 # 只追加表：行级触发器拒绝 DELETE；TRUNCATE 不触发行级触发器，仅测试清库使用
@@ -83,11 +87,11 @@ def db(db_engine):
     original = database_module.SessionLocal
     database_module.SessionLocal = factory
     try:
-        with factory() as s:
-            seed.__globals__["SessionLocal"] = factory
-            seed()
-            corpus = load_corpus(ROOT / "knowledge_base")
-            rebuild_index(s, chunk_corpus(corpus), FakeEmbedding())
+        seed.__globals__["SessionLocal"] = factory
+        seed()
+        retrieval = Retrieval(embedder=FakeEmbedding(), threshold=0.22, smoke=load_smoke_config())
+        result, _ = bootstrap_from_directory(factory, ROOT / "knowledge_base", retrieval)
+        assert result == "ACTIVATED", result
         yield factory
     finally:
         database_module.SessionLocal = original

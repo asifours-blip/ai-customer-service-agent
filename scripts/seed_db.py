@@ -5,6 +5,7 @@
   客户 U002 second_customer / demo123   —— 提供"别人家的订单"（IDOR 测试）
   客服 SUPPORT001 support_agent / demo123
   客服 SUPPORT002 support_agent2 / demo123 —— 第二名客服（领取竞争、非领取人鉴权）
+  知识库管理员 KBADMIN001 kb_admin / demo123 —— 上传 / 发布 / 回滚知识库版本
 
 设计意图：
   A10001  DELIVERED 签收 3 天 → 命中 7 天退货政策（售后主流程 Demo ④）
@@ -58,6 +59,7 @@ USERS: list[tuple[str, str, str, str]] = [
     ("U002", "second_customer", "u002@example.com", "CUSTOMER"),
     ("SUPPORT001", "support_agent", "support@example.com", "SUPPORT"),
     ("SUPPORT002", "support_agent2", "support2@example.com", "SUPPORT"),
+    ("KBADMIN001", "kb_admin", "kbadmin@example.com", "KB_ADMIN"),
 ]
 DEMO_PASSWORD = "demo123"
 
@@ -66,7 +68,7 @@ def seed() -> int:
     db = SessionLocal()
     try:
         if db.get(User, "U001") is not None:
-            # 已有库：只补齐后加入的演示账号（如 SUPPORT002），业务数据不动
+            # 已有库：只补齐后加入的演示账号（如 SUPPORT002、KBADMIN001），业务数据不动
             missing = [u for u in USERS if db.get(User, u[0]) is None]
             if missing:
                 pwd = hash_password(DEMO_PASSWORD)
@@ -152,7 +154,7 @@ def seed() -> int:
         db.add(Conversation(user_id="U001", session_id="demo-session-001", title="演示会话"))
 
         db.commit()
-        print("seed: 完成（4 用户 / 3 商品 / 6 订单 / 3 物流 / 2 工单 / 1 会话）")
+        print("seed: 完成（5 用户 / 3 商品 / 6 订单 / 3 物流 / 2 工单 / 1 会话）")
         return 0
     finally:
         db.close()

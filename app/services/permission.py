@@ -10,6 +10,7 @@ from app.services.errors import PermissionDeniedError
 
 ROLE_CUSTOMER = "CUSTOMER"
 ROLE_SUPPORT = "SUPPORT"
+ROLE_KB_ADMIN = "KB_ADMIN"  # 知识库管理员：只管理知识库版本，不接触订单/工单
 
 
 def ensure_owner(resource_owner_id: str, current_user_id: str) -> None:

@@ -20,7 +20,7 @@ from app.llm.client import FakeLLMClient, LLMClient
 from app.models.conversation import Conversation
 from app.models.user import User
 from app.rag.answerer import RagService
-from app.rag.embedding import FakeEmbedding, get_embedding_client
+from app.rag.embedding import serving_retrieval
 from app.schemas.api import ChatConfirmRequest, ChatRequest, ChatResponse, PendingActionOut
 from app.security.dependencies import get_current_user
 from app.services.database import get_db
@@ -36,20 +36,12 @@ def _agent_service() -> AgentService:
     settings = get_settings()
     if settings.no_paid_api:
         llm: LLMClient = FakeLLMClient()
-        from app.rag.embedding import EmbeddingClient
-
-        embedder: EmbeddingClient = FakeEmbedding()
-        threshold = settings.retrieval_score_threshold_fake
     else:
         from app.llm.deepseek import DeepseekClient
 
         llm = DeepseekClient()
-        embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
-        threshold = (
-            settings.retrieval_score_threshold_bge
-            if settings.embedding_backend == "bge"
-            else settings.retrieval_score_threshold_fake
-        )
+    # 检索 embedder 与知识库后台导入共用同一来源（serving_retrieval），保证版本向量与查询向量同域
+    embedder, threshold = serving_retrieval()
     rag = RagService(embedder, llm, score_threshold=threshold)
     return AgentService(llm, rag, build_registry())
 
