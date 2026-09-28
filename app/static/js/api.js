@@ -20,10 +20,12 @@ export const session = {
 };
 
 export class ApiError extends Error {
-  constructor(status, type, message) {
+  constructor(status, type, message, detail = null) {
     super(message);
     this.status = status;
     this.type = type;
+    // 结构化错误详情（如知识库上传校验的 errors: [{file, check, message}]）
+    this.detail = detail;
   }
 }
 
@@ -47,8 +49,11 @@ export async function api(path, { method = 'GET', body } = {}) {
   const headers = {};
   const current = session.get();
   if (current) headers.Authorization = `Bearer ${current.token}`;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const resp = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  // FormData（文件上传）由浏览器自己设置 multipart 边界，不能手动写 Content-Type
+  const isForm = body instanceof FormData;
+  if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
+  const payload = body === undefined || isForm ? body : JSON.stringify(body);
+  const resp = await fetch(path, { method, headers, body: payload });
   let data = null;
   try {
     data = await resp.json();
@@ -61,7 +66,8 @@ export async function api(path, { method = 'GET', body } = {}) {
   }
   if (!resp.ok) {
     const [type, message] = errorMessage(data, resp.status);
-    throw new ApiError(resp.status, type, message);
+    const detail = data && typeof data.detail === 'object' && !Array.isArray(data.detail) ? data.detail : null;
+    throw new ApiError(resp.status, type, message, detail);
   }
   return data;
 }

@@ -294,6 +294,37 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .basis .btn { margin-top: 12px; padding: 0; }
 .trace-json { background: var(--surface-2); padding: 8px; border-radius: var(--radius); font: 11px/1.5 var(--mono); overflow-x: auto; max-height: 360px; }
 
+.citations { margin: 6px 0 0; padding-left: 18px; }
+.citations li { margin-bottom: 6px; }
+.citation-head { color: var(--foreground); }
+.citations blockquote {
+  margin: 4px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--border);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 知识库管理 ---------- */
+.pill-kb-draft, .pill-kb-ready { background: var(--status-open-bg); color: var(--status-open-fg); }
+.pill-kb-ingesting { background: var(--status-processing-bg); color: var(--status-processing-fg); }
+.pill-kb-active { background: var(--status-resolved-bg); color: var(--status-resolved-fg); }
+.pill-kb-retired { background: var(--status-closed-bg); color: var(--status-closed-fg); }
+.pill-kb-failed { background: var(--danger-bg); color: var(--danger-fg); }
+.kb-banner { padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.kb-upload-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.kb-upload-row input[type=file] { width: auto; flex: 1 1 260px; font-size: 14px; }
+.kb-upload-result:not(:empty) { margin-top: 12px; }
+.kb-errors-title { margin: 0 0 4px; }
+.kb-errors { margin: 0; padding-left: 18px; }
+.kb-list { margin-top: 16px; }
+.kb-remark { max-width: 320px; font-size: 13px; }
+.kb-failure { color: var(--danger-fg); }
+.kb-checks { margin: 0 0 12px; padding-left: 18px; }
+[data-testid=kb-smoke] th, [data-testid=kb-smoke] td:nth-child(3) { white-space: nowrap; }
+.notice-success { border-color: #b7dfc4; background: var(--status-resolved-bg); color: var(--status-resolved-fg); }
+
 @media (max-width: 960px) {
   .chat-layout { grid-template-columns: 1fr; }
   .conv-list, .basis { display: none; }

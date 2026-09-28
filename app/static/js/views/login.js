@@ -3,8 +3,8 @@
 import { api, ApiError, session } from '../api.js';
 import { clear, h } from '../dom.js';
 
-const ROLE_PREFIX = { CUSTOMER: ['#/chat', '#/orders', '#/tickets'], SUPPORT: ['#/support/'] };
-const HOME = { CUSTOMER: '#/chat', SUPPORT: '#/support/tickets' };
+const ROLE_PREFIX = { CUSTOMER: ['#/chat', '#/orders', '#/tickets'], SUPPORT: ['#/support/'], KB_ADMIN: ['#/kb'] };
+const HOME = { CUSTOMER: '#/chat', SUPPORT: '#/support/tickets', KB_ADMIN: '#/kb' };
 
 function destination(role, next) {
   if (next && (ROLE_PREFIX[role] || []).some((p) => next.startsWith(p))) return next;
@@ -48,7 +48,7 @@ export function renderLogin(main, query) {
     },
   },
   h('h1', {}, '登录'),
-  h('p', { class: 'muted' }, next ? '登录后将返回刚才的页面。' : '客户与客服使用同一入口，登录后按角色进入。'),
+  h('p', { class: 'muted' }, next ? '登录后将返回刚才的页面。' : '客户、客服与知识库管理员使用同一入口，登录后按角色进入。'),
   h('label', { for: 'login-username' }, '用户名'),
   username,
   h('label', { for: 'login-password' }, '口令'),

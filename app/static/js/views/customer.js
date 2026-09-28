@@ -11,6 +11,7 @@ import {
   notice,
   statusPill,
 } from '../dom.js';
+import { KB_STATUS_LABEL } from './kb.js';
 import { feedbackView, ticketHeader, timeline } from './timeline.js';
 
 const EXAMPLES = [
@@ -43,11 +44,50 @@ function errorPage(main, err, what) {
 
 // ---------------- 咨询 ----------------
 
-function sourcesEl(sources) {
+// 引用来源所属的知识库版本（去重、按出现顺序）；版本化之前的旧回答没有 version_id
+function sourceVersions(sources) {
+  return [...new Set((sources || []).map((s) => s.version_id).filter(Boolean))];
+}
+
+function citationsEl(items) {
+  return h('ol', { class: 'citations', 'data-testid': 'citations' }, items.map((c) => h('li', {
+    'data-testid': 'citation', dataset: { versionId: c.version_id ?? '', found: String(c.found) },
+  },
+  h('div', { class: 'citation-head' },
+    `《${c.document}》${c.section ? ` · ${c.section}` : ''}`,
+    c.version_id ? h('span', { class: 'muted' },
+      ` · v${c.version_id}${c.version_status ? `（${KB_STATUS_LABEL[c.version_status] || c.version_status}）` : ''}`) : null),
+  c.found ? h('blockquote', {}, c.content) : h('p', { class: 'muted' }, c.reason))));
+}
+
+function sourcesEl(sources, traceId) {
   if (!sources || !sources.length) return null;
+  const versions = sourceVersions(sources);
+  const detail = h('div', { class: 'citations-slot', hidden: true });
+  const toggle = traceId ? h('button', {
+    class: 'btn btn-quiet btn-sm', type: 'button', 'data-testid': 'show-citations',
+    onclick: async () => {
+      if (!detail.hidden) {
+        detail.hidden = true;
+        return;
+      }
+      clear(detail, h('span', { class: 'muted' }, '加载中…'));
+      detail.hidden = false;
+      try {
+        // 按 (version_id, chunk_id) 取回回答当时的原文：该版本被替换后仍能查到
+        clear(detail, citationsEl(await api(`/api/traces/${encodeURIComponent(traceId)}/citations`)));
+      } catch (err) {
+        clear(detail, notice('error', `查询失败：${err.message}`));
+      }
+    },
+  }, '查看引用原文') : null;
   return h('div', { class: 'sources', 'data-testid': 'sources' },
     h('span', { class: 'sources-label' }, '引用来源'),
-    h('ul', {}, sources.map((s) => h('li', {}, `《${s.document}》${s.section ? ` · ${s.section}` : ''}`))));
+    versions.length ? h('span', { 'data-testid': 'kb-version-note' },
+      ` · 引用自知识库版本 ${versions.map((v) => `v${v}`).join('、')}`) : null,
+    h('ul', {}, sources.map((s) => h('li', {}, `《${s.document}》${s.section ? ` · ${s.section}` : ''}`))),
+    toggle,
+    detail);
 }
 
 const TYPE_LABEL = { REFUND: '退款', EXCHANGE: '换货', REPAIR: '维修' };
@@ -75,7 +115,7 @@ function messageEl(role, content, extra = {}) {
   const body = role === 'assistant' ? linkifyTickets(content, ticketHref) : [content];
   return h('div', { class: `msg msg-${role}`, 'data-testid': `msg-${role}` },
     h('div', { class: 'msg-body' }, body),
-    role === 'assistant' ? sourcesEl(extra.sources) : null,
+    role === 'assistant' ? sourcesEl(extra.sources, extra.trace_id) : null,
     role === 'assistant' ? eligibilityEl(extra.eligibility) : null);
 }
 
@@ -91,6 +131,8 @@ function basisPanel(resp) {
       h('div', {}, h('dt', {}, '工具'), h('dd', {},
         resp.tool_calls.length ? resp.tool_calls.map((t) => `${t.tool}${t.ok ? '' : '（失败）'}`).join('、') : '无')),
       h('div', {}, h('dt', {}, '拒答'), h('dd', {}, resp.abstained ? '是' : '否')),
+      h('div', {}, h('dt', {}, '知识库版本'), h('dd', { 'data-testid': 'basis-kb-version' },
+        sourceVersions(resp.sources).map((v) => `v${v}`).join('、') || '—')),
       h('div', {}, h('dt', {}, 'Trace'), h('dd', { class: 'mono' }, resp.trace_id))),
     h('button', {
       class: 'btn btn-quiet',
@@ -225,7 +267,9 @@ export async function renderChat(main, { params, isStale }) {
   fillList(conversations);
 
   if (detail) {
-    for (const m of detail.messages) list.append(messageEl(m.role, m.content, { sources: m.sources }));
+    for (const m of detail.messages) {
+      list.append(messageEl(m.role, m.content, { sources: m.sources, trace_id: m.trace_id }));
+    }
     renderCard(detail.pending_action);
   }
   if (!detail || !detail.messages.length) {
