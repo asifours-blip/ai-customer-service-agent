@@ -53,7 +53,7 @@
 
 ```bash
 cp .env.example .env        # 填 DEEPSEEK_API_KEY（仅 live 评测/真实演示需要；容器离线模式不需要）
-docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint 自动迁移/种子/摄取
+docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint 自动迁移/种子/知识库初始化（已有生效版本则跳过）
 # 打开 http://localhost:8000 —— 登录后按角色进入客户端或客服工作台
 ```
 
@@ -64,7 +64,18 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 - **客户**：会话列表与历史、聊天（引用来源 + 售后资格判定依据 + Trace）、待确认操作卡片（确认 / 取消）、我的订单、我的工单（处理记录时间线、补充回复、解决后评价一次）。
 - **客服**：工单队列（未指派 / 我的 / 全部 + 状态筛选）、领取、时间线、回复、状态推进（仅领取人）。
 
-前端按钮只是体验层，后端每个接口独立鉴权（角色、资源属主、领取人、工单状态）。规则见 `docs/decisions.md` D-019 / D-020。
+- **知识库管理员**：版本列表与状态、上传 .md（逐文件校验）、后台导入进度与失败原因、发布、回滚、版本详情（校验结果 / 文档 / 操作记录）。
+
+前端按钮只是体验层，后端每个接口独立鉴权（角色、资源属主、领取人、工单状态）。规则见 `docs/decisions.md` D-019 / D-020 / D-021。
+
+### 知识库版本管理（D-021）
+
+- 状态：`DRAFT → INGESTING → READY | FAILED`，`READY → ACTIVE`（发布），原 `ACTIVE → RETIRED`；回滚 = `RETIRED → ACTIVE`。检索只查 ACTIVE 版本。
+- 同一时刻至多一个 ACTIVE：数据库部分唯一索引兜底；发布/回滚在单事务内完成，并以请求携带的 `expected_active_version_id` 做比较交换，并发发布只有一个成功（另一方 409）。
+- 上传后后台导入，READY 之前自动检查 chunk 数量、向量维度，并跑 `kb_smoke_queries.yaml` 冒烟查询（每题必须命中指定文档且过拒答阈值）；任一不过即 FAILED 并写明原因，不影响当前生效版本。
+- 进程重启：没有存活连接持有导入锁的 DRAFT/INGESTING 版本在启动时被标为 FAILED。
+- 回答引用记录 `(version_id, chunk_id)`；旧版本只退役不删除，`GET /api/traces/{trace_id}/citations` 与聊天里的「查看引用原文」始终能取回当时的原文。
+- 启动：只有没有任何 ACTIVE 版本时才把 `knowledge_base/` 导入为初始版本并生效（`scripts/bootstrap_kb.py`），否则什么都不做。
 
 种子测试账号（仅本地演示 / 测试库使用，定义在 `scripts/seed_db.py`），口令均为 `demo123`：
 
@@ -74,6 +85,7 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 | `second_customer` | 客户 U002 | 越权测试用的「别人」 |
 | `support_agent` | 客服 SUPPORT001 | 已领取 T10002 |
 | `support_agent2` | 客服 SUPPORT002 | 第二名客服（领取竞争） |
+| `kb_admin` | 知识库管理员 KBADMIN001 | 上传 / 发布 / 回滚知识库版本（`#/kb`） |
 
 ## 开发
 
@@ -108,6 +120,7 @@ python -m pytest tests_e2e -v                  # 加 --headed 可看浏览器操
 
 ```bash
 EMBEDDING_BACKEND=bge python scripts/run_eval.py                        # 离线全量（零 API 费）
+python scripts/run_eval.py --kb-version active                          # 评测当前生效版本（也可填版本号；默认 dir＝与 knowledge_base/ 一致的版本）
 EMBEDDING_BACKEND=bge NO_PAID_API=false python scripts/run_eval.py --live   # 真实评测（成本护栏内）
 python scripts/run_eval.py --calibrate eval/calibration                 # κ 校准
 ```
@@ -121,7 +134,7 @@ python scripts/run_eval.py --calibrate eval/calibration                 # κ 校
 | [docs/evaluation.md](docs/evaluation.md) | 评测方法论、全部真实数字、κ 校准史、成本对账 |
 | [docs/demo.md](docs/demo.md) | 六个 Demo 操作手册 + 截图 + 答疑要点 |
 | [docs/ticket-concurrency-case-study.md](docs/ticket-concurrency-case-study.md) | PostgreSQL 并发下定位 Ticket ID 竞态、最小修复与 CI 回归 |
-| [docs/decisions.md](docs/decisions.md) | D-001 ~ D-018 全部工程决策（含踩坑与理由） |
+| [docs/decisions.md](docs/decisions.md) | D-001 ~ D-021 全部工程决策（含踩坑与理由） |
 | [docs/spec.md](docs/spec.md) | 三方合并规格（唯一事实源） |
 
 ## 红线（本仓库的工程纪律）

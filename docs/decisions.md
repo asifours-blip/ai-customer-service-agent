@@ -72,3 +72,14 @@ router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LO
 
 ## D-020 确认卡片复用 graph 确认路径（2026-09-28，阶段 2 工作台）
 原确认入口只有聊天发「确认」（`detect_confirmation` 正则）。新增 `POST /api/chat/confirm {session_id, pending_action_id, decision}` 供前端卡片使用，但**不另写执行路径**：API 只把 decision（YES/NO）和卡片上的 pending id 放进同一张图的初始状态；`check_pending` 先校验该 id 仍是会话当前 pending 且未过期（否则 STALE：不执行、不清除当前 pending），再与文本确认一样进入 `execute_confirmed`（REVALIDATE 权限与资格 → `create_ticket` 以 `pending_action.id` 为幂等键）。会话历史中记录为「确认」/「取消」，与手输一致；卡片与聊天两种入口可以混用，幂等键相同。
+
+## D-021 知识库版本管理：草稿 / 发布 / 回滚与引用追溯（2026-09-28，阶段 3）
+背景：原流程每次启动 `delete(KbChunk)` 后全量重建；chunk_id 全局唯一、无版本字段。核查结论：删除与插入同一事务，embedding 异常时不会提交，所以「失败即清空」只在语料为空时成立；但文档一改旧回答的引用就找不到当时原文、没有草稿与发布之分、评测重置会清掉线上知识库，这些问题确实存在。
+数据模型：`kb_versions`（状态 CHECK、来源哈希、创建人、向量后端、进度、校验结果、失败原因）、`kb_documents`（每版本原文 + sha256）、`kb_audit_log`；`kb_chunks.version_id` 非空，唯一键 `(version_id, chunk_id)`。迁移把现有 chunk 归入自动创建的 v1（ACTIVE，source=MIGRATION）；旧流程没存原文，v1 无文档行，来源哈希取 chunk 内容哈希。**空知识库不建 v1**，否则启动初始化会因「已有生效版本」而跳过。降级只能保留 ACTIVE 版本的 chunk（结构所限，有损）。
+单一 ACTIVE：部分唯一索引 `uq_kb_versions_single_active`（`WHERE status='ACTIVE'`）在数据库层兜底。发布/回滚：单事务内先取全局 advisory lock 串行化，再比较调用方给出的 `expected_active_version_id` 与实际生效版本（不一致 409），然后「旧 ACTIVE → RETIRED（flush）→ 目标 → ACTIVE → 审计」一次提交。选择比较交换而不是「后到者覆盖」：只串行化的话，稍晚到的并发请求会在不知情的情况下覆盖前一个发布；比较交换下两个基于同一生效版本的发布恰好一个成功，与到达时间无关。
+导入：上传同步校验（只收 .md、单文件 200 KB / 50 个 / 总 2 MB、UTF-8、必需 front matter、纯文件名防路径穿越、document_id 重复），任一不过整体 400 并逐条列出文件与检查项；通过后落草稿，BackgroundTasks 后台导入。导入期间持有事务级 advisory lock `(72001, version_id)`；chunk 行与校验同事务写入，校验不过回滚，失败版本不留 chunk。READY 前检查 chunk 数量（每篇至少 1）、向量维度（512 且为有限值）与冒烟查询（`kb_smoke_queries.yaml`，期望文档须在 top3 且分数过线上拒答阈值）。导入只写新版本，从不改动 ACTIVE。
+重启恢复：应用启动（lifespan）时，对 DRAFT/INGESTING 版本逐个 `pg_try_advisory_xact_lock`，拿得到锁（没有存活连接在导入）才标 FAILED；导入进程被杀后连接断开、锁自动释放。已知边界：多实例部署时，另一实例刚提交 DRAFT、后台任务尚未取锁的毫秒级窗口内若恰有实例启动，该 DRAFT 会被误标 FAILED（可重新上传，不影响线上）。
+检索与引用：`store.search` 默认只 join ACTIVE 版本；引用来源增加 `version_id`，`GET /api/traces/{id}/citations` 按 `(version_id, chunk_id)` 取回原文（版本 RETIRED 仍可查）；版本化之前的旧 trace 没有版本号，接口如实返回「无法追溯」，不按 chunk_id 猜。
+向量后端：聊天检索、后台导入、启动初始化统一用 `serving_retrieval()`（离线开关下固定 FakeEmbedding），版本记录 `embedding_backend`，发布时与当前服务不一致则拒绝，评测时与评测 embedder 不一致也拒绝。
+启动与评测：entrypoint 改为 `bootstrap_kb.py`，仅在没有 ACTIVE 时导入 `knowledge_base/` 并生效（失败则容器启动失败）。`run_eval.py --kb-version dir|active|N`：dir 复用内容哈希与后端都一致的已校验版本、没有则导入新版本但不发布；评测检索固定在所选版本。评测重置只 TRUNCATE 业务表，知识库四张表不在范围内（顺带修复：原逐表 DELETE 会被 ticket_events 的只追加触发器拒绝）。
+权限：新角色 KB_ADMIN（种子 `kb_admin`），`/api/kb/*` 全部仅限该角色，客户与客服 403。
