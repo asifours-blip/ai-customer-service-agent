@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # 先校验配置再碰数据库：live 模式（NO_PAID_API=false）缺 key / base_url / JWT_SECRET 等直接启动失败
+    from app.config import get_settings
+    from app.services.config_status import log_startup_status
+
+    log_startup_status(get_settings())
+
     # 进程启动：上一个进程崩溃/重启残留的 DRAFT/INGESTING 版本（没有存活连接持有导入锁）→ FAILED
     from app.kb.service import recover_interrupted
     from app.services import database

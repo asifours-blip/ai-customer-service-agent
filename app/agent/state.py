@@ -64,6 +64,8 @@ class AgentState(TypedDict, total=False):
     eligibility: dict[str, Any]
     # 输出
     final_answer: str
+    # 回答方式：MODEL（模型生成）/ OFFLINE_ECHO（离线回显）/ TEMPLATE（确定性模板）/ ERROR
+    answer_mode: str
     error_type: str | None
     # Trace 用计量
     prompt_tokens: int

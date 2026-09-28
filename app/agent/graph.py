@@ -21,7 +21,7 @@ from app.agent.router import (
     detect_confirmation,
 )
 from app.agent.state import AgentState, Route, make_pending, pending_expired
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, answer_mode_of
 from app.models.base import utcnow
 from app.rag.answerer import RagService
 from app.security.guardrails import GUARDRAIL_REPLY, detect_injection
@@ -141,6 +141,7 @@ def build_agent_graph(
             "rag_sources": result.sources,
             "rag_abstained": result.abstained,
             "final_answer": result.answer,
+            "answer_mode": result.answer_mode,
             "prompt_tokens": state.get("prompt_tokens", 0) + result.usage_prompt_tokens,
             "completion_tokens": state.get("completion_tokens", 0) + result.usage_completion_tokens,
         }
@@ -327,7 +328,7 @@ def build_agent_graph(
             state["user_query"],
             max_tokens=300,
         )
-        return {"route": Route.DIRECT_LLM, "final_answer": resp.content,
+        return {"route": Route.DIRECT_LLM, "final_answer": resp.content, "answer_mode": answer_mode_of(llm),
                 "prompt_tokens": state.get("prompt_tokens", 0) + resp.usage.prompt_tokens,
                 "completion_tokens": state.get("completion_tokens", 0) + resp.usage.completion_tokens}
 

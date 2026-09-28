@@ -35,6 +35,8 @@ class TraceOut(BaseModel):
     tool_arguments: dict[str, Any] | None
     tool_result: dict[str, Any] | None
     llm_model: str | None
+    llm_calls: list[dict[str, Any]] | None
+    answer_mode: str | None
     prompt_tokens: int | None
     completion_tokens: int | None
     total_tokens: int | None

@@ -49,13 +49,20 @@ def get_my_conversation(
     # 引用来源来自同一 trace 的检索记录（trace 与会话同属本人，已随会话鉴权）
     trace_ids = [m.trace_id for m in messages if m.trace_id]
     sources_by_trace: dict[str, list[dict[str, str]]] = {}
+    mode_by_trace: dict[str, str | None] = {}
     if trace_ids:
         for trace in db.scalars(select(AgentTrace).where(AgentTrace.trace_id.in_(trace_ids))):
             docs = trace.retrieved_documents or []
             sources_by_trace[trace.trace_id] = [{k: str(v) for k, v in d.items()} for d in docs]
+            mode_by_trace[trace.trace_id] = trace.answer_mode
     out = ConversationDetailOut.model_validate(conv)
     out.messages = [
-        MessageOut.model_validate(m).model_copy(update={"sources": sources_by_trace.get(m.trace_id or "", [])})
+        MessageOut.model_validate(m).model_copy(
+            update={
+                "sources": sources_by_trace.get(m.trace_id or "", []),
+                "answer_mode": mode_by_trace.get(m.trace_id or ""),
+            }
+        )
         for m in messages
     ]
     pending = public_pending(load_state_from_conversation(conv)["pending_action"])

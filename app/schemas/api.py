@@ -164,6 +164,8 @@ class MessageOut(ORMModel):
     created_at: datetime
     # 助手消息的引用来源（取自同 trace 的 retrieved_documents），刷新后历史仍可展示依据
     sources: list[dict[str, str]] = []
+    # 助手消息的回答方式（取自同 trace）：刷新后仍能区分模型生成 / 离线回显 / 模板 / 出错提示
+    answer_mode: str | None = None
 
 
 class PendingActionOut(BaseModel):
@@ -206,6 +208,8 @@ class ChatResponse(BaseModel):
     intent: str | None = None
     abstained: bool = False
     latency_ms: int = 0
+    # 回答方式：MODEL（模型生成）/ OFFLINE_ECHO（离线回显检索原文，未调用模型）/ TEMPLATE（确定性模板）
+    answer_mode: str = "TEMPLATE"
     # 售后资格判定依据（EligibilityService 确定性结果）与待确认操作
     eligibility: dict[str, Any] | None = None
     pending_action: PendingActionOut | None = None
