@@ -9,6 +9,8 @@ from pathlib import Path
 _FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
 _FIELD = re.compile(r"^(\w+):\s*\"?([^\"\n]*)\"?\s*$", re.M)
 
+REQUIRED_FIELDS = ("document_id", "document_name", "category", "policy_version")
+
 
 @dataclass(frozen=True)
 class KnowledgeDocument:
@@ -19,12 +21,12 @@ class KnowledgeDocument:
     sections: list[tuple[str, str]]  # (heading, body)
 
 
-def _parse_front_matter(text: str) -> tuple[dict[str, str], str]:
+def parse_front_matter(text: str) -> tuple[dict[str, str] | None, str]:
+    """返回 (字段, 正文)；没有 front matter 时字段为 None（区别于「有 front matter 但缺字段」）。"""
     m = _FRONT_MATTER.match(text)
     if m is None:
-        return {}, text
-    fields = dict(_FIELD.findall(m.group(1)))
-    return fields, text[m.end() :]
+        return None, text
+    return dict(_FIELD.findall(m.group(1))), text[m.end() :]
 
 
 def _split_sections(body: str) -> list[tuple[str, str]]:
@@ -38,13 +40,13 @@ def _split_sections(body: str) -> list[tuple[str, str]]:
     return sections
 
 
-def load_document(path: Path) -> KnowledgeDocument:
-    raw = path.read_text(encoding="utf-8")
-    fields, body = _parse_front_matter(raw)
-    required = ("document_id", "document_name", "category", "policy_version")
-    missing = [k for k in required if not fields.get(k)]
+def parse_document(raw: str, source: str) -> KnowledgeDocument:
+    """从原文解析文档：文件导入与数据库里保存的版本原文走同一套解析。"""
+    fields, body = parse_front_matter(raw)
+    fields = fields or {}
+    missing = [k for k in REQUIRED_FIELDS if not fields.get(k)]
     if missing:
-        raise ValueError(f"{path}: front-matter 缺少字段 {missing}")
+        raise ValueError(f"{source}: front-matter 缺少字段 {missing}")
     return KnowledgeDocument(
         document_id=fields["document_id"],
         document_name=fields["document_name"],
@@ -52,6 +54,10 @@ def load_document(path: Path) -> KnowledgeDocument:
         policy_version=fields["policy_version"],
         sections=_split_sections(body),
     )
+
+
+def load_document(path: Path) -> KnowledgeDocument:
+    return parse_document(path.read_text(encoding="utf-8"), str(path))
 
 
 def load_corpus(root: Path) -> list[KnowledgeDocument]:

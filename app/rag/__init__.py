@@ -8,10 +8,12 @@ from app.rag.embedding import (
     EmbeddingClient,
     FakeEmbedding,
     LocalBGEEmbedding,
+    backend_name,
     get_embedding_client,
+    serving_retrieval,
 )
-from app.rag.loader import KnowledgeDocument, load_corpus, load_document
-from app.rag.store import RetrievedChunk, count_chunks, rebuild_index, search
+from app.rag.loader import KnowledgeDocument, load_corpus, load_document, parse_document
+from app.rag.store import RetrievedChunk, count_chunks, search
 
 __all__ = [
     "ABSTAIN_MESSAGE",
@@ -25,12 +27,14 @@ __all__ = [
     "EmbeddingClient",
     "FakeEmbedding",
     "LocalBGEEmbedding",
+    "backend_name",
     "get_embedding_client",
+    "serving_retrieval",
     "KnowledgeDocument",
     "load_corpus",
     "load_document",
+    "parse_document",
     "RetrievedChunk",
     "count_chunks",
-    "rebuild_index",
     "search",
 ]

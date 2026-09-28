@@ -1,6 +1,6 @@
 # 系统架构
 
-> 本文回答"这个项目由什么组成、为什么这样分层"。决策细节见 `docs/decisions.md`（D-001 ~ D-018），本文只述结论与位置。
+> 本文回答"这个项目由什么组成、为什么这样分层"。决策细节见 `docs/decisions.md`（D-001 ~ D-021），本文只述结论与位置。
 
 ## 一句话
 
@@ -31,14 +31,15 @@ app/
 ├── services/       业务事实与规则：PermissionService、EligibilityService(policy/rules.yaml)、
 │                   database、errors
 ├── security/       guardrails 提示注入检测（软防线；硬防线在工具层权限校验）
-├── llm/            LLMClient 协议 + FakeLLMClient + DeepseekClient（NO_PAID_API 策略闸）
-├── models/         User/Product/Order/Logistics/Ticket/TicketReply/
+├── llm/            LLMClient 协议 + FakeLLMClient + DeepseekClient（NO_PAID_API 策略闸、错误分类与重试，D-022）
+├── kb/             知识库版本：上传校验 / 后台导入与校验 / 发布·回滚（比较交换）/ 重启恢复 / 引用追溯（D-021）
+├── models/         User/Product/Order/Logistics/Ticket/TicketReply/KbVersion/KbDocument/KbChunk/KbAuditLog/
 │                   Conversation(AgentSessionState 持久化字段)/Message/AgentTrace
-└── static/         零构建单页演示台（聊天 + Trace 面板 + 六个 Demo 按钮）
+└── static/         零构建前端（原生 ES modules + hash 路由）：登录页、客户端、客服工作台
 eval/               数据集(9 类 110 条) / runner / metrics / judge / calibration / cost / report
 knowledge_base/     12 篇中文 Markdown（front-matter 含 document_id/policy_version）
 policy/             rules.yaml —— 退款 7 天/换货 15 天/保修 12 个月×30 天，机器可读规则源
-scripts/            seed_db / ingest_docs / run_eval(CLI)
+scripts/            seed_db / bootstrap_kb（仅无生效版本时初始化知识库）/ run_eval(CLI)
 ```
 
 ## 关键架构原则
@@ -53,7 +54,7 @@ scripts/            seed_db / ingest_docs / run_eval(CLI)
 
 ```bash
 docker compose up --build      # db(pgvector) + backend：entrypoint 依次执行
-                               # alembic upgrade head → seed_db(幂等) → ingest_docs(重建) → uvicorn
+                               # alembic upgrade head → seed_db(幂等) → bootstrap_kb(已有生效版本则跳过) → uvicorn
 ```
 
 - 容器默认离线模式（NO_PAID_API=true + FakeEmbedding，不装 torch）——零成本可起，检索质量为演示级。

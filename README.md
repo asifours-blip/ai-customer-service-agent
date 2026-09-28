@@ -6,15 +6,15 @@
 
 模拟真实企业售后客服：用户提问 → 意图识别 → 受控 Agent 决策（RAG 知识问答 / 订单物流工单工具调用 / 售后资格确定性判定 / 转人工）→ 后端权限校验 → 执行 → 带引用的回答或诚实拒答 → 全链路 Trace → 自动化评测（110 条评测集 + LLM Judge + 人工盲标校准）。
 
-**状态：Phase 0~9 全部完成。默认质量门禁以 CI 与 `pytest --collect-only` 为准；真实 PostgreSQL 集成与 Ticket 并发回归在独立 CI job 执行。**
+**状态：客户端、客服工作台、知识库版本管理与反馈转评测已实现；隔离验证范围、真实模型待验证项和最小接入配置见[三档状态](#status-tiers)。**
 
 ## Repository history
 
-2026-08-23 是首次将已完成模块按功能切片入库的记录，并非线上迭代节奏。2026-08-24 的 PostgreSQL sequence 修复是公开后的真实 Ticket ID 并发缺陷；根因、最小修复与回归证据见 [Ticket concurrency case study](docs/ticket-concurrency-case-study.md)。当前行为以 `main` 和 GitHub Actions 为准。
+2026-08-23 是首次将已完成模块按功能切片入库的记录，并非线上迭代节奏。2026-08-24 的 PostgreSQL sequence 修复是公开后的真实 Ticket ID 并发缺陷；根因、最小修复与回归证据见 [Ticket concurrency case study](docs/ticket-concurrency-case-study.md)。已发布状态以 `main` 和 GitHub Actions 为准；本地未发布分支的验收见对应提交。
 
 | Demo 1 · RAG 引用 | Demo 4 · 售后确认+幂等 | Demo 5 · 越权拦截 |
 |---|---|---|
-| ![RAG](docs/assets/demo1_rag_citation.png) | ![售后](docs/assets/demo4_aftersales_confirm.png) | ![越权](docs/assets/demo5_idor_blocked.png) |
+| ![RAG](docs/assets/chat_citation.png) | ![售后](docs/assets/pending_confirmation.png) | ![越权](docs/assets/customer_idor_denied.png) |
 
 ## 核心设计决策与评测结果
 
@@ -48,14 +48,64 @@
 - **Judge 指标未发布**：κ 校准未达 0.70（三轮迭代后仍 22/24）——根因是人工标签近单一分布下的 κ 悖论 + 1-vs-2 边界案例，过程完整记录在 `docs/decisions.md` D-017/D-018；
 - CI/容器的 FakeLLM/FakeEmbedding 只守回归，不代表生成与检索质量；
 - 容器演示模式检索为演示级（真实模式用本地 BGE）。
+- 知识库冒烟查询集（`kb_smoke_queries.yaml`）只在 fake 后端下实测（期望文档分数均 ≥ 0.27，阈值 0.22）；bge 后端（阈值 0.52）下尚未实测，首次用 bge 导入的版本若因冒烟查询失败，需按实际分数复核题目或阈值（D-021）。
 
 ## 快速开始
 
 ```bash
 cp .env.example .env        # 填 DEEPSEEK_API_KEY（仅 live 评测/真实演示需要；容器离线模式不需要）
-docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint 自动迁移/种子/摄取
-# 打开 http://localhost:8000 —— 零构建演示台（六个 Demo 按钮 + Trace 面板）
+docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint 自动迁移/种子/知识库初始化（已有生效版本则跳过）
+# 打开 http://localhost:8000 —— 登录后按角色进入客户端或客服工作台
 ```
+
+### 客户端与客服工作台
+
+零构建前端（原生 JS + ES modules，由 FastAPI `/static` 提供），hash 路由（如 `#/tickets/T10001`），刷新、直接打开链接、重新登录后都回到同一视图；token 存 sessionStorage，任何接口 401 → 登录页 → 登录后回到原页面。
+
+- **客户**：会话列表与历史、聊天（引用来源 + 售后资格判定依据 + Trace）、待确认操作卡片（确认 / 取消）、我的订单、我的工单（处理记录时间线、补充回复、解决后评价一次）。
+- **客服**：工单队列（未指派 / 我的 / 全部 + 状态筛选）、领取、时间线、回复、状态推进（仅领取人）。
+
+- **知识库管理员**：版本列表与状态、上传 .md（逐文件校验）、后台导入进度与失败原因、发布、回滚、版本详情（校验结果 / 文档 / 操作记录）。
+
+前端按钮只是体验层，后端每个接口独立鉴权（角色、资源属主、领取人、工单状态）。规则见 `docs/decisions.md` D-019 / D-020 / D-021。
+
+### 知识库版本管理（D-021）
+
+- 状态：`DRAFT → INGESTING → READY | FAILED`，`READY → ACTIVE`（发布），原 `ACTIVE → RETIRED`；回滚 = `RETIRED → ACTIVE`。检索只查 ACTIVE 版本。
+- 同一时刻至多一个 ACTIVE：数据库部分唯一索引兜底；发布/回滚在单事务内完成，并以请求携带的 `expected_active_version_id` 做比较交换，并发发布只有一个成功（另一方 409）。
+- 上传后后台导入，READY 之前自动检查 chunk 数量、向量维度，并跑 `kb_smoke_queries.yaml` 冒烟查询（每题必须命中指定文档且过拒答阈值）；任一不过即 FAILED 并写明原因，不影响当前生效版本。
+- 进程重启：创建已超过宽限期（`KB_RECOVER_GRACE_MINUTES`，默认 10 分钟）且没有存活连接持有导入锁的 DRAFT/INGESTING 版本，在启动时被标为 FAILED。
+- 上传方式：合并（以当前生效版本的原文为底，按 document_id 覆盖或新增）或完整替换；当前生效版本是迁移归档、没有保存原文时只允许完整替换。
+- 回答引用记录 `(version_id, chunk_id)`；旧版本只退役不删除，`GET /api/traces/{trace_id}/citations` 与聊天里的「查看引用原文」始终能取回当时的原文。
+- 启动：只有没有任何 ACTIVE 版本时才把 `knowledge_base/` 导入为初始版本并生效（`scripts/bootstrap_kb.py`），否则什么都不做。
+
+种子测试账号（仅本地演示 / 测试库使用，定义在 `scripts/seed_db.py`），口令均为 `demo123`：
+
+| 用户名 | 角色 | 说明 |
+|---|---|---|
+| `demo_customer` | 客户 U001 | 主演示用户（A10001 签收 3 天，可退款） |
+| `second_customer` | 客户 U002 | 越权测试用的「别人」 |
+| `support_agent` | 客服 SUPPORT001 | 已领取 T10002 |
+| `support_agent2` | 客服 SUPPORT002 | 第二名客服（领取竞争） |
+| `kb_admin` | 知识库管理员 KBADMIN001 | 上传 / 发布 / 回滚知识库版本（`#/kb`） |
+
+<a id="status-tiers"></a>
+
+### 反馈进评测、部署与恢复
+
+三档现状，如实分开（代码写完 ≠ 隔离测试通过 ≠ 真实联调通过）：
+
+**已实现且隔离验证通过的（真实 PostgreSQL 集成测试 / 本机真实 Docker 演练，非模拟）：**
+- 回答反馈：客户对每条 assistant 回答标「有帮助/没帮助」（`POST /api/feedback/{message_id}`），同一用户对同一条回答只能提交一次（唯一约束兜底）；SUPPORT 角色的审核队列（`GET /api/feedback/admin/queue`）一次性给出问题、回答、RAG 引用、知识库版本、trace_id；审核动作写进只追加的 `feedback_review_audit`（DB 触发器拒绝 UPDATE/DELETE，与 `kb_audit_log`/`ticket_events` 同做法）。见 `tests/integration/test_answer_feedback.py`。
+- 转评测用例：审核通过写入 `eval/datasets/converted/vN.jsonl` 当前开放版；`python scripts/seal_converted.py --actor support_agent` 封版并生成含逐行与整文件 SHA-256 的 manifest，后续用例进入下一版。评测用 `python scripts/run_eval.py --converted-version vN` 显式加载已封版快照，报告记录版本及 manifest SHA-256；固定 110 条数据集（`eval/datasets/*.jsonl`）仍走默认评测路径。
+- 知识库版本对比：`scripts/run_kb_diff.py` 复用评测执行器，让同一组样本分别在版本 A/B 上跑，输出逐题差异报告；本机真实跑过一次（详见 `docs/evaluation.md`「知识库版本对比」）。
+- 售后节点不再多打一次白付费的 RAG 生成调用（`app/rag/answerer.py` 的 `generate=False`），回归测试直接查 Trace 断言 LLM 调用次数为 0（此前是 1）。
+- `live-eval.yml` 的 `JWT_SECRET` 改成每次运行随机生成，不再写死/缺失导致启动校验拒绝。
+- 备份恢复：`scripts/backup.sh` / `scripts/restore.sh`（pg_dump/pg_restore 自定义格式）在本机对真实 Docker Postgres 完整演练过一次——造出会话/引用/待确认操作/已确认工单/多个知识库版本（含 RETIRED）/已领取工单等完整状态，备份、另起临时容器恢复、应用连上验证：引用能取回原文、待确认操作仍可确认且复用幂等键不重复开单、`ticket_events` 的只追加触发器恢复后仍生效、已确认会话「重启」后再发确认不产生第二张工单。完整记录见 `docs/backup-restore-drill.md`；`alembic check` 对恢复后的库无漂移。
+
+**需要真实 key 才能验证的：** 无新增（反馈/审核/评测对比/备份恢复均离线可跑；真实 LLM 相关行为沿用既有 D-022 结论）。
+
+**最小接入配置：** 与主线一致，见下方「真实模型接入」；反馈与知识库对比功能不需要额外配置。
 
 ## 开发
 
@@ -74,10 +124,30 @@ docker compose up -d db && python -m pytest -q -m integration  # 真实 PG 集�
 python -m ruff check . && python -m mypy app eval
 ```
 
+### 端到端测试（真实浏览器，默认不进 CI 快速 job）
+
+`tests_e2e/` 用 uvicorn 子进程启动真实应用、连真实 PostgreSQL 测试库，Playwright（Chromium）驱动页面。**每个用例都会清空并重建测试库数据**，所以必须同时设置 `DATABASE_URL` 与 `TEST_DATABASE_URL` 且指向同一个测试库，否则直接退出。
+
+```bash
+python -m pip install -e ".[dev,e2e]"
+python -m playwright install chromium          # 浏览器下载到用户缓存目录，不装系统级软件
+export DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_test
+export TEST_DATABASE_URL=$DATABASE_URL
+python -m pytest tests_e2e -v                  # 加 --headed 可看浏览器操作
+```
+
+### 真实模型接入（NO_PAID_API=false）
+
+离线与真实模式是同一套代码，只替换 LLM 客户端。`NO_PAID_API=false` 时启动即校验 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（公网须 https）、`MODEL_NAME`、非默认 `JWT_SECRET`，缺一项拒绝启动。模型调用失败按类别（未配置 / 鉴权 / 限流 / 5xx / 超时 / 连接 / 中断 / 坏响应 / 截断 / 过滤）返回用户可读提示，不回退到模板答案；只重试 429、5xx、连接失败与连接超时，读超时与响应中断不重试并按上限计费。每条回答标注回答方式（模型生成 / 离线回显 / 模板回复），Trace 记录每次模型调用。管理员可在 `GET /api/system/config` 查看配置状态（只显示 key 是否已设置）。BGE 默认从官方源加载；需要镜像时显式设置 `HF_ENDPOINT`，也可用 `BGE_MODEL_PATH` + `HF_HUB_OFFLINE=1` 纯本地加载。详见 `docs/decisions.md` D-022。
+
 ## 评测复现
 
 ```bash
+# 评测会清空业务表：必须指定独立评测库（库名以 _eval 或 _test 结尾、且不同于 DATABASE_URL），否则拒绝运行
+export EVAL_DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_eval
+DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head                   # 评测库首次使用前迁移（库需先建好）
 EMBEDDING_BACKEND=bge python scripts/run_eval.py                        # 离线全量（零 API 费）
+python scripts/run_eval.py --kb-version active                          # 评测当前生效版本（也可填版本号；默认 dir＝与 knowledge_base/ 一致的版本）
 EMBEDDING_BACKEND=bge NO_PAID_API=false python scripts/run_eval.py --live   # 真实评测（成本护栏内）
 python scripts/run_eval.py --calibrate eval/calibration                 # κ 校准
 ```
@@ -91,7 +161,8 @@ python scripts/run_eval.py --calibrate eval/calibration                 # κ 校
 | [docs/evaluation.md](docs/evaluation.md) | 评测方法论、全部真实数字、κ 校准史、成本对账 |
 | [docs/demo.md](docs/demo.md) | 六个 Demo 操作手册 + 截图 + 答疑要点 |
 | [docs/ticket-concurrency-case-study.md](docs/ticket-concurrency-case-study.md) | PostgreSQL 并发下定位 Ticket ID 竞态、最小修复与 CI 回归 |
-| [docs/decisions.md](docs/decisions.md) | D-001 ~ D-018 全部工程决策（含踩坑与理由） |
+| [docs/backup-restore-drill.md](docs/backup-restore-drill.md) | 备份恢复演练：真实命令、真实输出、四项验收点逐条核对 |
+| [docs/decisions.md](docs/decisions.md) | D-001 ~ D-021 全部工程决策（含踩坑与理由） |
 | [docs/spec.md](docs/spec.md) | 三方合并规格（唯一事实源） |
 
 ## 红线（本仓库的工程纪律）

@@ -1,62 +1,53 @@
-# 演示手册（六个 Demo）
+# 演示手册：登录、售后与客服闭环
 
-> 环境：本地真实模式（`DEEPSEEK_API_KEY` + `EMBEDDING_BACKEND=bge`），登录身份 **客户 U001（demo_customer）**。截图为 2026-08-23 真实运行捕获，存于 `docs/assets/`。演示台右上身份选择器登录后，点击对应 Demo 按钮即可，每个按钮发送预设消息。
+以下图片由 `scripts/capture_screenshots.py` 在本地 `csagent-pg-test` 测试库重置到种子状态后，以 Playwright 操作真实浏览器采集。运行配置为 `NO_PAID_API=true`、`EMBEDDING_BACKEND=fake`；截图里的「离线回显」和「模板回复」不代表真实模型生成效果。脚本只接受 `localhost:55432/agent_cs_test`，运行前同时设置 `DATABASE_URL`、`TEST_DATABASE_URL` 为该地址。
 
-## Demo 1 — 知识库问答 + 引用（RAG）
+## 1. 登录与知识库引用
 
-点击 `Demo1 知识库+引用`（发送"这个耳机支持多久保修？"）。
+用 `demo_customer / demo123` 登录。聊天页点击「这个耳机支持多久保修？」后，回答显示引用来源与知识库版本，「本轮依据」显示路由、回答方式和 Trace。
 
-预期：答案"整机保修 12 个月，充电盒保修 12 个月"，附 📎 引用《保修政策》《AirMusic Pro 产品说明》等来源；右侧 Trace 面板显示本次 trace_id、route=RAG、retrieval top_score。
+![登录页](assets/login.png)
 
-![Demo1](assets/demo1_rag_citation.png)
+![客户聊天：引用来源与本轮依据](assets/chat_citation.png)
 
-## Demo 2 — 订单工具（权限内查询）
+## 2. 售后资格与确认卡片
 
-点击 `Demo2 订单工具`。
+发送「A10001 买的耳机用了三天坏了，可以退款吗」。规则层核对订单、签收天数与退款期限；聊天里显示售后资格判定，右侧「本轮依据」显示 `answer_mode` 的中文标识。待确认卡片要求客户明确确认后才开单。
 
-预期：走 query_order（READ_ONLY 工具）返回订单事实（状态/金额/时间）；Trace 中可见工具调用与参数。
+![客户聊天：售后资格](assets/chat_eligibility.png)
 
-## Demo 3 — 多轮指代（上下文实体解析）
+![待确认卡片](assets/pending_confirmation.png)
 
-先点 `Demo3 多轮(先发这条)`（查 A10001），等回答后再点 `Demo3 续·指代`（"那它大概什么时候到？"）。
+点击「确认创建」，在新工单详情中查看 `CREATED` 事件和时间线；确认动作使用 pending action 的幂等键，重复请求不会产生第二张工单。
 
-预期：第二轮"它"无显式实体 → 从会话状态取 active_order_id=A10002 对应上下文 → 返回该订单物流；体现"显式状态 > 对话推断 > 猜测"的实体解析层级与状态落库。
+![客户工单详情与时间线](assets/customer_ticket_timeline.png)
 
-![Demo3](assets/demo3_multiturn_coref.png)
+## 3. 客服处理
 
-## Demo 4 — 售后闭环（资格判定 + 确认 + 幂等）
+用 `support_agent / demo123` 登录，进入未指派队列，领取刚创建的工单；回复客户并依次推进到「处理中」「已解决」。详情页保留领取、回复与状态变更记录。
 
-点 `Demo4 售后闭环` → 系统核对订单与政策（EligibilityService 确定性判定，签收 3 天在退款 7 天窗口内）→ 回复"符合申请条件，回复【确认】即可" → 点 `确认（配合 Demo4）`。
+![客服队列](assets/support_queue.png)
 
-预期（截图即实际结果）：确认触发 REVALIDATE + create_ticket；由于此前 live 评测已为该订单创建过 REFUND 工单 `T10003`（idempotency_key 由 pending_action_id 派生，可查 tickets 表验证），幂等键命中 DB UNIQUE，返回"该订单已存在同类进行中的工单: T10003，无需重复申请"——**这正是幂等设计的意义：重复确认/重试绝不产生第二张工单**。
+![客服工单详情：回复与已解决](assets/support_ticket_resolved.png)
 
-![Demo4](assets/demo4_aftersales_confirm.png)
+## 4. 知识库版本与权限
 
-## Demo 5 — 越权拦截（IDOR 防护）
+用 `kb_admin / demo123` 进入知识库管理页，可以看到版本列表及 ACTIVE 状态。`demo_customer` 直接打开属于 `second_customer` 的 `T10002` 链接时，页面显示无权查看，接口返回 403，工单内容不泄漏。
 
-点 `Demo5 越权拦截`（查询他人订单 A20001，属 U002）。
+![知识库版本列表](assets/kb_versions.png)
 
-预期："查询订单失败：用户无权访问该资源"。硬防线在工具层（`order.user_id == JWT 当前用户`），与话术无关；IDOR 评测集 10/10。
+![客户越权访问被拒](assets/customer_idor_denied.png)
 
-![Demo5](assets/demo5_idor_blocked.png)
+## 复现与边界
 
-## Demo 6 — 注入防护（Guardrails）
+在本地确认 `csagent-pg-test` 正运行，并在项目 `.venv` 安装 Playwright 后执行。浏览器需已安装 Playwright Chromium（`.\.venv\Scripts\python.exe -m playwright install chromium`）；若该缓存缺失，脚本会尝试通过 Playwright 的 `chrome` channel 使用本机已安装的 Chrome。以下 PowerShell 命令可直接复制：
 
-点 `Demo6 注入防护`（注入指令）。
+```powershell
+$env:DATABASE_URL = 'postgresql+psycopg://app:app@localhost:55432/agent_cs_test'
+$env:TEST_DATABASE_URL = $env:DATABASE_URL
+$env:NO_PAID_API = 'true'
+$env:EMBEDDING_BACKEND = 'fake'
+.\.venv\Scripts\python.exe scripts/capture_screenshots.py
+```
 
-预期：拒答并说明能力边界，Trace 记 `INJECTION_FLAGGED:*`；注入评测集 10/10。
-
-![Demo6](assets/demo6_injection_guard.png)
-
-## Trace 面板（全链路复盘）
-
-任一消息发送后，右侧面板展示该次请求的 trace_id / intent / route / retrieval / 工具调用与幂等键 / tokens / latency / error_type / policy_version；`GET /api/trace/{trace_id}` 可回放完整链路。
-
-![Trace](assets/trace_panel.png)
-
-## 设计答疑要点
-
-- **副作用工具为何不能简单 retry**：READ_ONLY 重试无害；create_ticket 盲目重试会重复开单——幂等键 + DB UNIQUE 让重试语义变为"返回首张工单"。
-- **状态为何落库**：LangGraph State 是工作流内存态；pending_action（含过期时间）必须落 PostgreSQL，服务重启后确认流才可恢复。
-- **IDOR 与注入的区别**：注入是"诱导系统做不该做的事"（软防线拦话术）；IDOR 是"合法接口访问不属于自己的资源"（硬防线拦事实）。
-- **为什么离线和 live 数字几乎一样**：99.09% 任务成功由确定性链路（意图规则/工具/权限/资格/拒答阈值）决定，LLM 生成质量影响的 Judge 指标未发布（κ 未达标，见 `docs/evaluation.md`）。
+脚本会清空并重建这个测试库的业务数据和知识库版本；结束时关闭它启动的 uvicorn。真实模型效果、历史 live 评测数字和成本证据见 [evaluation.md](evaluation.md)，不能从这些离线截图推断。

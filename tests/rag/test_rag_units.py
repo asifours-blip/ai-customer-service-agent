@@ -114,7 +114,8 @@ class _FakeSearch:
     def __init__(self, hits: list) -> None:
         self.hits = hits
 
-    def __call__(self, db, query_vector, top_k=5):  # noqa: ANN001
+    def __call__(self, db, query_vector, top_k=5, *, version_id=None):  # noqa: ANN001
+        self.version_id = version_id
         return self.hits
 
 
@@ -135,7 +136,7 @@ def test_answerer_abstains_when_score_below_threshold(monkeypatch: pytest.Monkey
     from app.rag.answerer import RagService
     from app.rag.store import RetrievedChunk
 
-    low = RetrievedChunk("c1", "d1", "无关文档", "节", "内容", 0.05)
+    low = RetrievedChunk(1, "c1", "d1", "无关文档", "节", "内容", 0.05)
     monkeypatch.setattr(answerer.store, "search", _FakeSearch([low]))
     svc = RagService(FakeEmbedding(), FakeLLMClient(), score_threshold=0.10)
     result = svc.answer(None, "问题")  # type: ignore[arg-type]
@@ -149,13 +150,14 @@ def test_answerer_answers_with_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.rag.answerer import RagService
     from app.rag.store import RetrievedChunk
 
-    hit = RetrievedChunk("c1", "doc-policy-warranty", "保修政策", "保修期限", "整机保修 12 个月", 0.42)
+    hit = RetrievedChunk(3, "c1", "doc-policy-warranty", "保修政策", "保修期限", "整机保修 12 个月", 0.42)
     monkeypatch.setattr(answerer.store, "search", _FakeSearch([hit]))
     svc = RagService(FakeEmbedding(), FakeLLMClient(), score_threshold=0.10)
     result = svc.answer(None, "耳机保修多久")  # type: ignore[arg-type]
     assert not result.abstained
     assert result.sources[0]["document"] == "保修政策"
     assert result.sources[0]["chunk_id"] == "c1"
+    assert result.sources[0]["version_id"] == "3"  # 引用记录 (version_id, chunk_id)，版本切换后仍可追溯
     assert result.retrieval["top_score"] == 0.42
     assert result.retrieval["top_k"] == 1
     assert result.usage_prompt_tokens > 0

@@ -3,6 +3,9 @@
 - MAX_SINGLE_LIVE_EVAL_COST_USD=1.00（preflight，--force 可越）
 - HARD_EVAL_COST_LIMIT_USD=2.00（硬闸，任何情况不可越）
 - estimated 与 actual 并存，差值保留不覆盖
+- usage 未知的调用（接口没返回 usage、读超时、响应中断）不按 0 计：客户端给出上限
+  （输入 ≤ UTF-8 字节数 + 模板开销，输出 ≤ max_tokens，见 app.llm.client.LLMUsage.ceiling），
+  传进来的 token 已含这些上限值；usage_unknown_calls 单独报告条数，actual 因此是偏保守的上界
 """
 
 from __future__ import annotations
@@ -113,6 +116,7 @@ def reconcile_actual(
     judge_prompt_tokens: int = 0,
     judge_completion_tokens: int = 0,
     estimate: dict[str, Any] | None = None,
+    usage_unknown_calls: int = 0,
 ) -> dict[str, Any]:
     agent = pricing.models[agent_model]
     judge = pricing.models[judge_model]
@@ -133,6 +137,12 @@ def reconcile_actual(
             "judge_completion": judge_completion_tokens,
         },
         "calculated_actual_cost_usd": actual,
+        "usage_unknown_calls": usage_unknown_calls,
+        "usage_unknown_note": (
+            f"{usage_unknown_calls} 次调用 usage 未知（未返回 / 读超时 / 响应中断），已按上限计入"
+            if usage_unknown_calls
+            else "全部调用都有接口返回的 usage；按上限计入的调用为 0"
+        ),
         "pricing_snapshot": {
             "provider": pricing.provider,
             "checked_at": pricing.checked_at,

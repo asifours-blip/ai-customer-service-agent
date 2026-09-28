@@ -68,3 +68,9 @@ jobs:
           tests_stress/test_race_conditions.py::test_s1_concurrent_same_key_exactly_one_ticket
           tests_stress/test_race_conditions.py::test_s1b_concurrent_different_keys_create_unique_ticket_ids
           tests_stress/test_race_conditions.py::test_s2_concurrent_double_confirm_returns_controlled_idempotent_semantics
+          tests_stress/test_race_conditions.py::test_s6a_concurrent_same_key_different_users_never_share_ticket
+          tests_stress/test_race_conditions.py::test_s6b_concurrent_same_user_same_key_different_request_conflicts
+          tests_stress/test_race_conditions.py::test_s7_concurrent_transition_only_one_wins
+          tests_stress/test_race_conditions.py::test_s8_concurrent_claim_only_one_wins
+          tests_stress/test_race_conditions.py::test_s9_concurrent_feedback_only_one_row
+          tests_stress/test_race_conditions.py::test_s10_concurrent_kb_publish_single_active

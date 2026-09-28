@@ -22,6 +22,10 @@ def _integrity_error(constraint_name: str) -> IntegrityError:
 
 def test_idempotency_unique_violation_requires_exact_postgresql_constraint_name() -> None:
     assert ticket_service._is_idempotency_key_unique_violation(  # type: ignore[attr-defined]
+        _integrity_error("tickets_user_id_idempotency_key_key")
+    )
+    # 旧的全局唯一约束已被迁移移除，不应再被当作幂等冲突
+    assert not ticket_service._is_idempotency_key_unique_violation(  # type: ignore[attr-defined]
         _integrity_error("tickets_idempotency_key_key")
     )
     assert not ticket_service._is_idempotency_key_unique_violation(  # type: ignore[attr-defined]

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from app.llm.client import LLMClient
+from app.llm.client import USAGE_UNKNOWN, LLMClient
+from app.llm.errors import LLMError
 
 JUDGE_SYSTEM = (
     "你是严格的客服系统回答质量评审。给定【用户问题】【系统回答】和【参考要点】，只输出 JSON："
@@ -88,10 +89,21 @@ class LLMJudge:
 
         user = f"【用户问题】{question}\n【系统回答】{answer}\n【参考要点】{reference}\n请评分。"
         # v4-pro 是推理模型：reasoning 计入 completion，300 会在输出 JSON 前耗尽（曾致 4/24 空 content）
-        resp = self.llm.complete(JUDGE_SYSTEM, user, max_tokens=1200, json_mode=True)
-        usage = {
+        try:
+            resp = self.llm.complete(JUDGE_SYSTEM, user, max_tokens=1200, json_mode=True)
+        except LLMError as exc:
+            # 调用失败也要记账：读超时 / 响应中断等结果未知的调用按上限计入（exc.usage），确定未计费的为 0
+            return {
+                "score": -1,
+                "reason": f"judge 调用失败（{exc.category.value}）",
+                "judge_prompt_tokens": exc.usage.prompt_tokens,
+                "judge_completion_tokens": exc.usage.completion_tokens,
+                "judge_usage_unknown": exc.usage.status == USAGE_UNKNOWN,
+            }
+        usage: dict[str, Any] = {
             "judge_prompt_tokens": resp.usage.prompt_tokens,
             "judge_completion_tokens": resp.usage.completion_tokens,
+            "judge_usage_unknown": resp.usage.status == USAGE_UNKNOWN,  # 接口没返回 usage：上面是上限值
         }
         try:
             data = json.loads(resp.content.strip().removeprefix("```json").removesuffix("```").strip())

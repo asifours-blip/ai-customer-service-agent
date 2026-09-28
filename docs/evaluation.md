@@ -56,12 +56,32 @@
 
 ```bash
 docker compose up -d db
+# 评测会清空业务表：必须指定独立评测库（库名以 _eval 或 _test 结尾、且不同于 DATABASE_URL），否则拒绝运行
+export EVAL_DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_eval
+DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head                   # 评测库首次使用前迁移（库需先建好）
 EMBEDDING_BACKEND=bge python scripts/run_eval.py              # 离线全量（零 API 费）
 EMBEDDING_BACKEND=bge NO_PAID_API=false python scripts/run_eval.py --live   # 真实评测（需 .env key）
 python scripts/run_eval.py --calibrate eval/calibration       # κ 校准
 ```
 
 CI：push 自动跑离线单测 + 真实 PG 集成（`.github/workflows/ci.yml`）；真实评测仅 `live-eval.yml` 手动触发。
+
+## 知识库版本对比
+
+`scripts/run_kb_diff.py` 复用同一套执行器（`build_agent` / `select_kb_version` / `reset_environment` / `run_all`），
+让同一组评测样本分别在知识库版本 A、B 上各跑一遍，按 `case_id` 对齐后逐题比较 outcome / 是否拒答 / 引用文档集合 /
+回答正文，输出到 `eval/reports/generated/kb_diff_vA_vB_<时间戳>.json`（未变化的题目也在报告里，只是 `changed=false`）。
+
+```bash
+export DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs        # 仅用于安全闸比较，不会被连接
+export EVAL_DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_eval
+python scripts/run_kb_diff.py --a 1 --b 2                   # 版本 1 vs 版本 2（READY/ACTIVE/RETIRED 均可）
+python scripts/run_kb_diff.py --a active --b 3 --category rag   # 只跑 rag 类、更快
+```
+
+本地曾用两个真实知识库版本（在保修政策文档末尾追加一段说明生成 v2）跑过一次全量对比：30 条 rag 样本里
+1 条（`rag_025`「维修一般需要多长时间？」）从 v1 的 SUCCESS 变成 v2 的 REFUSED——追加内容改变了该文档的
+分块/向量，导致检索分数掉到拒答阈值以下。纯函数部分（差异比较逻辑）见 `tests/evaluation/test_kb_diff.py`。
 
 ## 诚实的局限清单
 

@@ -50,18 +50,14 @@ def test_abstain_on_unanswerable(db) -> None:
     assert "没有足够信息" in result.answer
 
 
-def test_empty_kb_abstains(db) -> None:
-    from app.rag import rebuild_index
+def test_no_active_version_abstains(db) -> None:
+    """没有 ACTIVE 版本时检索为空 → 拒答（chunk 仍在库里，只是不属于生效版本）。db 夹具每个用例重建，无需恢复。"""
+    from sqlalchemy import text
 
     with db() as s:
-        rebuild_index(s, [], FakeEmbedding())
+        s.execute(text("UPDATE kb_versions SET status = 'RETIRED' WHERE status = 'ACTIVE'"))
+        s.commit()
+        assert count_chunks(s) == 0
         svc = RagService(FakeEmbedding(), FakeLLMClient(), score_threshold=0.22)
         result = svc.answer(s, "耳机保修多久")
         assert result.abstained
-        # 恢复知识库，避免污染后续测试
-        from pathlib import Path
-
-        from app.rag import chunk_corpus, load_corpus
-
-        corpus = load_corpus(Path("knowledge_base"))
-        rebuild_index(s, chunk_corpus(corpus), FakeEmbedding())

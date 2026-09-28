@@ -87,7 +87,11 @@ def test_side_effect_timeout_semantics() -> None:
     r = ex.execute(None, tool, "U001", {"x": 1})  # type: ignore[arg-type]
     assert not r.success
     assert r.error["type"] == "SIDE_EFFECT_TIMEOUT"
-    assert "不要重复提交" in r.error["message"]
+    # 结果未知：不能说失败/不要重复提交，要引导查看工单列表并说明重新确认不会重复开单
+    msg = r.error["message"]
+    assert "结果未知" in msg and "可能已经创建成功" in msg and "我的工单" in msg
+    assert "重新确认会复用同一个幂等键，不会重复开单" in msg
+    assert "失败" not in msg and "不要重复提交" not in msg
     assert tool.calls == 1
 
 

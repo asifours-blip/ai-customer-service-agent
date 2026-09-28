@@ -21,7 +21,7 @@ from app.agent.router import (
     detect_confirmation,
 )
 from app.agent.state import AgentState, Route, make_pending, pending_expired
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, answer_mode_of
 from app.models.base import utcnow
 from app.rag.answerer import RagService
 from app.security.guardrails import GUARDRAIL_REPLY, detect_injection
@@ -74,8 +74,16 @@ def build_agent_graph(
 
     def check_pending(state: AgentState) -> dict[str, Any]:
         pending = state.get("pending_action")
+        decision = state.get("decision")
+        if decision is not None:
+            # 结构化确认：卡片上的 id 必须仍是会话当前的 pending_action，否则不执行、也不动当前 pending
+            if not pending or pending.get("id") != state.get("expected_pending_id"):
+                return {"confirmation": "STALE", "final_answer": "该待确认操作已失效或已处理，请以最新消息为准。"}
+            if pending_expired(pending):
+                return {"confirmation": "STALE", "pending_action": None,
+                        "final_answer": "该申请已超过确认时限，请重新发起售后申请。"}
         if pending and not pending_expired(pending):
-            conf = detect_confirmation(state["user_query"])
+            conf = Confirmation(decision) if decision is not None else detect_confirmation(state["user_query"])
             if conf is Confirmation.YES:
                 return {"confirmation": "YES"}
             if conf is Confirmation.NO:
@@ -133,6 +141,7 @@ def build_agent_graph(
             "rag_sources": result.sources,
             "rag_abstained": result.abstained,
             "final_answer": result.answer,
+            "answer_mode": result.answer_mode,
             "prompt_tokens": state.get("prompt_tokens", 0) + result.usage_prompt_tokens,
             "completion_tokens": state.get("completion_tokens", 0) + result.usage_completion_tokens,
         }
@@ -214,7 +223,9 @@ def build_agent_graph(
 
         order = svc_get_order(db, order_id, state["user_id"])
         elig = evaluate_after_sales(order, req_type, utcnow())
-        policy = rag.answer(db, _POLICY_QUERY[req_type])
+        # 这里只需要「是否命中政策文档 + 引用来源」，生成的正文用不到（下面只拼固定文案），
+        # 用 generate=False 跳过 LLM 生成，避免多付一次生成调用的钱（结果反正会被丢弃）
+        policy = rag.answer(db, _POLICY_QUERY[req_type], generate=False)
         policy_text = "（详见售后政策）" if policy.abstained else ""
         det = elig.details
         if elig.eligible:
@@ -236,7 +247,8 @@ def build_agent_graph(
                 "需要我为您创建售后工单吗？（回复【确认】即可）"
             )
             return {"route": Route.AFTER_SALES, "tool_calls": [call_q], "tool_results": [r.data or {}],
-                    "eligibility": {"eligible": True, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule},
+                    "eligibility": {"eligible": True, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule,
+                                    "request_type": req_type, "order_id": order_id, "details": det},
                     "rag_sources": policy.sources, "rag_abstained": policy.abstained,
                     "pending_action": pending, "final_answer": answer, "active_order_id": order_id}
         dd, ad = det.get("delivered_days"), det.get("allowed_days")
@@ -249,7 +261,8 @@ def build_agent_graph(
         default_reason = f"很抱歉，订单 {order_id} 不符合申请条件（{elig.reason_code}）"
         answer = reason_map.get(elig.reason_code, default_reason) + "。"
         return {"route": Route.AFTER_SALES, "tool_calls": [call_q], "tool_results": [r.data or {}],
-                "eligibility": {"eligible": False, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule},
+                "eligibility": {"eligible": False, "reason_code": elig.reason_code, "policy_rule": elig.policy_rule,
+                                "request_type": req_type, "order_id": order_id, "details": det},
                 "rag_sources": policy.sources, "rag_abstained": policy.abstained,
                 "final_answer": answer, "active_order_id": order_id}
 
@@ -301,6 +314,10 @@ def build_agent_graph(
             return {"route": Route.EXECUTE_CONFIRMED, "pending_action": None, "tool_calls": [call_c],
                     "tool_results": [d], "final_answer": answer, "active_order_id": order_id,
                     "active_ticket_id": d.get("ticket_id")}
+        if rc.error and rc.error["type"] == "SIDE_EFFECT_TIMEOUT":
+            # 结果未知≠失败：原样给出查证指引，保留 pending_action 以便用同一幂等键重新确认
+            return {"route": Route.EXECUTE_CONFIRMED, "tool_calls": [call_c], "tool_results": [rc.error],
+                    "final_answer": rc.error["message"]}
         if rc.error and rc.error["type"] == "DUPLICATE":
             return {"route": Route.EXECUTE_CONFIRMED, "pending_action": None, "tool_calls": [call_c],
                     "tool_results": [rc.error], "final_answer": f"{rc.error['message']}，无需重复申请。"}
@@ -313,7 +330,7 @@ def build_agent_graph(
             state["user_query"],
             max_tokens=300,
         )
-        return {"route": Route.DIRECT_LLM, "final_answer": resp.content,
+        return {"route": Route.DIRECT_LLM, "final_answer": resp.content, "answer_mode": answer_mode_of(llm),
                 "prompt_tokens": state.get("prompt_tokens", 0) + resp.usage.prompt_tokens,
                 "completion_tokens": state.get("completion_tokens", 0) + resp.usage.completion_tokens}
 
@@ -366,7 +383,7 @@ def build_agent_graph(
     )
     b.add_conditional_edges(
         "check_pending",
-        lambda s: "finalize" if s.get("confirmation") == "NO" else "classify",
+        lambda s: "finalize" if s.get("confirmation") in ("NO", "STALE") else "classify",
         {"finalize": "finalize", "classify": "classify"},
     )
     b.add_edge("classify", "resolve_entity")

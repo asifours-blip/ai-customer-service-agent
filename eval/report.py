@@ -81,6 +81,9 @@ def build_html_report(payload: dict[str, Any]) -> str:
     calib_html = ""
     if payload.get("calibration"):
         calib_html = f"<h2>人工校准</h2><pre>{html.escape(json.dumps(payload['calibration'], ensure_ascii=False, indent=2))}</pre>"
+    dataset = payload.get("dataset", {"kind": "fixed", "case_count": 110})
+    dataset_label = (f"转换版本 {dataset['version']} · manifest sha256={dataset['manifest_sha256']}"
+                     if dataset["kind"] == "converted" else "固定 110 条数据集")
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>评测报告 · {payload['run_id']}</title>
 <style>
@@ -92,6 +95,7 @@ table{{border-collapse:collapse;background:#fff;font-size:13px}} td,th{{border:1
 </style></head><body>
 <h1>Agent + RAG 智能客服 · 评测报告</h1>
 <p class="meta">run_id={payload['run_id']} · mode={mode} · {payload['generated_at']} · cases={m['total']} · 全部数字可由仓库与数据集复现</p>
+<p class="meta">数据集：{html.escape(dataset_label)}</p>
 <div class="cards">{cards}</div>
 <h2>分类成功率</h2>
 {_svg_bars(cats)}

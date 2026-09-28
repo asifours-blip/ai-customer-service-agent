@@ -6,6 +6,11 @@ S2 同会话并发重复"确认"（Agent 层，check_pending 消费竞态）
 S3 响应丢失后重试（executor 超时但 INSERT 已 commit）
 S4 pending 过期与确认竞争（EXPIRED 分支 vs 有效执行）
 S5 跨会话状态污染（B 会话不得执行/泄漏 A 会话的 pending 与实体）
+S6 唯一约束竞争恢复路径（跨用户同 key 不共享工单；同用户同 key 不同请求 → 冲突）
+S7 SUPPORT 并发状态迁移（行锁：只能一方成功，另一方 INVALID_TRANSITION）
+S8 两名 SUPPORT 并发领取同一工单（行锁：只能一方成功，另一方 ALREADY_ASSIGNED）
+S9 同一工单并发提交两次反馈（行锁 + 唯一约束：只能一条，另一方 DUPLICATE）
+S10 知识库多版本并发发布/回滚（比较交换 + 部分唯一索引：每轮只有一个成功，任意时刻恰好一个 ACTIVE）
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -22,7 +28,7 @@ from app.agent.service import AgentService
 from app.agent.state import make_pending, save_state_to_conversation
 from app.api.chat import _agent_service
 from app.models.conversation import Conversation
-from app.models.ticket import Ticket
+from app.models.ticket import Ticket, TicketEvent, TicketFeedback
 from app.services import tickets as ticket_service
 from app.tools.ticket import build_registry
 
@@ -87,7 +93,8 @@ def test_s1_concurrent_same_key_exactly_one_ticket(db, monkeypatch) -> None:
             try:
                 r = tool.execute(s, U, {
                     "order_id": ORDER, "category": "REFUND",
-                    "title": f"stress-{i}", "idempotency_key": key,
+                    # 同 key 的重放必须是同一份请求；内容不同属于 IDEMPOTENCY_CONFLICT（见 S6b）
+                    "title": "stress-s1", "idempotency_key": key,
                 })
                 with lock:
                     outcomes.append({
@@ -301,3 +308,259 @@ def test_s5_cross_session_no_pending_or_entity_leak(db) -> None:
         conv_a = s.scalar(select(Conversation).where(Conversation.session_id == sid_a))
         assert conv_a is not None
         assert conv_a.pending_action_id == "pa-stress-s5-0001", "B 的操作不应消费/清空 A 的 pending"
+
+
+# ---------- S6：唯一约束竞争的恢复路径也必须按用户隔离、按指纹判冲突 ----------
+
+def _race_creates(db, monkeypatch, requests: list[tuple[str, dict]]) -> list[dict]:
+    """所有请求先都查不到幂等键，分配 ID 后对齐，强制每一方都走到 INSERT/commit。"""
+    n = len(requests)
+    allocation_barrier = threading.Barrier(n)
+    original_next_ticket_id = ticket_service.next_ticket_id
+
+    def synchronized_next_ticket_id(session):
+        ticket_id = original_next_ticket_id(session)
+        allocation_barrier.wait()
+        return ticket_id
+
+    monkeypatch.setattr(ticket_service, "next_ticket_id", synchronized_next_ticket_id)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+
+    def worker(req: tuple[str, dict]) -> None:
+        user_id, fields = req
+        with db() as s:
+            try:
+                ticket, created = ticket_service.create_ticket(s, user_id=user_id, **fields)
+                row = {"user": user_id, "kind": "ok", "ticket": ticket.id, "owner": ticket.user_id,
+                       "created": created}
+            except Exception as exc:
+                row = {"user": user_id, "kind": getattr(exc, "code", type(exc).__name__)}
+            with lock:
+                outcomes.append(row)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, requests))
+    return outcomes
+
+
+def test_s6a_concurrent_same_key_different_users_never_share_ticket(db, monkeypatch) -> None:
+    fields = {"category": "OTHER", "title": "stress-s6a", "idempotency_key": "pa-stress-s6a-0001"}
+    outcomes = _race_creates(db, monkeypatch, [("U001", fields), ("U002", fields)])
+    print("\nS6a outcomes:", outcomes)
+    assert all(o["kind"] == "ok" for o in outcomes), outcomes
+    assert all(o["owner"] == o["user"] for o in outcomes), f"竞争失败方拿到了别人的工单: {outcomes}"
+    assert all(o["created"] for o in outcomes), outcomes
+    assert len({o["ticket"] for o in outcomes}) == 2
+    assert _stress_ticket_count(db, "pa-stress-s6a-%") == 2
+
+
+def test_s6b_concurrent_same_user_same_key_different_request_conflicts(db, monkeypatch) -> None:
+    key = "pa-stress-s6b-0001"
+    outcomes = _race_creates(db, monkeypatch, [
+        ("U001", {"category": "OTHER", "title": "stress-s6b-left", "idempotency_key": key}),
+        ("U001", {"category": "OTHER", "title": "stress-s6b-right", "idempotency_key": key}),
+    ])
+    print("\nS6b outcomes:", outcomes)
+    assert sorted(o["kind"] for o in outcomes) == ["IDEMPOTENCY_CONFLICT", "ok"], outcomes
+    assert _stress_ticket_count(db, "pa-stress-s6b-%") == 1
+
+
+# ---------- S7：SUPPORT 并发状态迁移 ----------
+
+def test_s7_concurrent_transition_only_one_wins(db, monkeypatch) -> None:
+    """领取人并发两次把 OPEN 工单推进到 PROCESSING（双击 / 两个标签页）：只能一方成功，另一方 INVALID_TRANSITION。
+
+    阶段 2 起只有领取人能迁移状态，因此先由 SUPPORT001 领取，两个并发请求都以领取人身份发出。
+    Barrier 放在「读到状态之后、校验迁移之前」，强制两方都先读再写；
+    若读取带行锁，第二方读不到旧状态，Barrier 超时后按串行语义继续。
+    """
+    from app.services import ticket_state
+
+    with db() as s:
+        ticket_service.claim_ticket(s, "T10001", "SUPPORT001")
+
+    n = 2
+    read_barrier = threading.Barrier(n, timeout=2)
+    original_assert = ticket_state.assert_transition
+
+    def synchronized_assert(current: str, target: str) -> None:
+        with suppress(threading.BrokenBarrierError):
+            read_barrier.wait()
+        original_assert(current, target)
+
+    monkeypatch.setattr(ticket_state, "assert_transition", synchronized_assert)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+
+    def worker(_i: int) -> None:
+        with db() as s:
+            try:
+                t = ticket_service.transition_ticket(s, "T10001", "PROCESSING", "SUPPORT001")
+                row = {"kind": "ok", "status": t.status}
+            except Exception as exc:
+                row = {"kind": getattr(exc, "code", type(exc).__name__)}
+            with lock:
+                outcomes.append(row)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, range(n)))
+
+    print("\nS7 outcomes:", outcomes)
+    assert sorted(o["kind"] for o in outcomes) == ["INVALID_TRANSITION", "ok"], outcomes
+    with db() as s:
+        ticket = s.get(Ticket, "T10001")
+        assert ticket is not None and ticket.status == "PROCESSING"
+        changes = s.scalars(
+            select(TicketEvent).where(TicketEvent.ticket_id == "T10001", TicketEvent.event_type == "STATUS_CHANGED")
+        ).all()
+        assert len(changes) == 1  # 失败的一方不留处理记录
+
+
+# ---------- S8：两名 SUPPORT 并发领取 ----------
+
+def test_s8_concurrent_claim_only_one_wins(db, monkeypatch) -> None:
+    """SUPPORT001 与 SUPPORT002 同时领取未指派的 T10001：只能一方成功，另一方 ALREADY_ASSIGNED。
+
+    Barrier 放在「持锁读到 assignee_id 之后、判断能否领取之前」：没有行锁时两方都会读到 NULL 并各自写入
+    （后写覆盖前写，两方都返回成功）；有行锁时第二方阻塞在 SELECT ... FOR UPDATE，Barrier 超时后串行继续。
+    """
+    n = 2
+    read_barrier = threading.Barrier(n, timeout=2)
+    original = ticket_service.ensure_claimable
+
+    def synchronized(ticket, support_user_id: str) -> None:  # noqa: ANN001
+        with suppress(threading.BrokenBarrierError):
+            read_barrier.wait()
+        original(ticket, support_user_id)
+
+    monkeypatch.setattr(ticket_service, "ensure_claimable", synchronized)
+    outcomes: list[dict] = []
+    lock = threading.Lock()
+
+    def worker(support_id: str) -> None:
+        with db() as s:
+            try:
+                t = ticket_service.claim_ticket(s, "T10001", support_id)
+                row = {"kind": "ok", "support": support_id, "assignee": t.assignee_id}
+            except Exception as exc:
+                row = {"kind": getattr(exc, "code", type(exc).__name__), "support": support_id}
+            with lock:
+                outcomes.append(row)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, ["SUPPORT001", "SUPPORT002"]))
+
+    print("\nS8 outcomes:", outcomes)
+    assert sorted(o["kind"] for o in outcomes) == ["ALREADY_ASSIGNED", "ok"], outcomes
+    winner = next(o["support"] for o in outcomes if o["kind"] == "ok")
+    with db() as s:
+        ticket = s.get(Ticket, "T10001")
+        assert ticket is not None and ticket.assignee_id == winner
+        claims = s.scalars(
+            select(TicketEvent).where(TicketEvent.ticket_id == "T10001", TicketEvent.event_type == "CLAIMED")
+        ).all()
+        assert [c.actor_id for c in claims] == [winner]
+
+
+# ---------- S9：同一工单并发提交反馈 ----------
+
+def test_s9_concurrent_feedback_only_one_row(db, monkeypatch) -> None:
+    """客户在两个标签页同时提交反馈：只能写入一条，另一方 DUPLICATE（409）。"""
+    with db() as s:
+        ticket_service.claim_ticket(s, "T10001", "SUPPORT001")
+        ticket_service.transition_ticket(s, "T10001", "PROCESSING", "SUPPORT001")
+        ticket_service.transition_ticket(s, "T10001", "RESOLVED", "SUPPORT001")
+
+    n = 2
+    read_barrier = threading.Barrier(n, timeout=2)
+    original = ticket_service.get_feedback
+
+    def synchronized(session, ticket_id: str):  # noqa: ANN001, ANN202
+        with suppress(threading.BrokenBarrierError):
+            read_barrier.wait()
+        return original(session, ticket_id)
+
+    monkeypatch.setattr(ticket_service, "get_feedback", synchronized)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def worker(rating: int) -> None:
+        with db() as s:
+            try:
+                ticket_service.submit_feedback(s, "T10001", "U001", rating, "并发提交")
+                kind = "ok"
+            except Exception as exc:
+                kind = getattr(exc, "code", type(exc).__name__)
+            with lock:
+                outcomes.append(kind)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        list(pool.map(worker, [4, 5]))
+
+    print("\nS9 outcomes:", outcomes)
+    assert sorted(outcomes) == ["DUPLICATE", "ok"], outcomes
+    with db() as s:
+        assert len(s.scalars(select(TicketFeedback).where(TicketFeedback.ticket_id == "T10001")).all()) == 1
+
+
+# ---------- S10：知识库并发发布 / 回滚 ----------
+
+def test_s10_concurrent_kb_publish_single_active(db) -> None:
+    """多名管理员同时发布不同版本（夹杂回滚）：每轮恰好一个成功；
+
+    读线程全程观察到恰好一个 ACTIVE、检索结果只来自一个版本。
+    """
+    from app.kb.service import KbConflictError, publish
+    from app.models.knowledge import KbVersion
+    from app.rag import FakeEmbedding, search
+    from tests.integration.test_kb_versions import TRADEIN_MD, new_version
+
+    for i in range(5):
+        v = new_version(db, {"policy-tradein.md": TRADEIN_MD.replace(b"80 ", f"{81 + i} ".encode())})
+        assert v.status == "READY"
+
+    stop = threading.Event()
+    violations: list[str] = []
+    qv = FakeEmbedding().embed_query("耳机整机保修多久")
+
+    def reader() -> None:
+        while not stop.is_set():
+            with db() as s:
+                active = s.scalars(select(KbVersion.id).where(KbVersion.status == "ACTIVE")).all()
+                versions = {h.version_id for h in search(s, qv, 5)}
+            if len(active) != 1 or len(versions) != 1:
+                violations.append(f"active={active} hit_versions={versions}")
+
+    watcher = threading.Thread(target=reader)
+    watcher.start()
+    try:
+        for _round in range(4):
+            with db() as s:
+                rows = s.execute(select(KbVersion.id, KbVersion.status).order_by(KbVersion.id)).all()
+            current = next(vid for vid, st in rows if st == "ACTIVE")
+            candidates = [(vid, st == "RETIRED") for vid, st in rows if st in ("READY", "RETIRED")]
+            barrier = threading.Barrier(len(candidates), timeout=10)
+            outcomes: list[str] = []
+            lock = threading.Lock()
+
+            def worker(vid: int, rollback: bool, current: int = current, barrier: threading.Barrier = barrier,
+                       outcomes: list[str] = outcomes, lock: threading.Lock = lock) -> None:
+                barrier.wait()
+                with db() as s:
+                    try:
+                        publish(s, vid, actor="KBADMIN001", expected_active_version_id=current, rollback=rollback)
+                        kind = "ok"
+                    except KbConflictError as exc:
+                        kind = exc.code
+                with lock:
+                    outcomes.append(kind)
+
+            with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+                list(pool.map(lambda c: worker(*c), candidates))
+            print(f"S10 round {_round}: {len(candidates)} 并发 → {sorted(outcomes)}")
+            assert sorted(outcomes) == ["KB_CONFLICT"] * (len(candidates) - 1) + ["ok"], outcomes
+    finally:
+        stop.set()
+        watcher.join(timeout=10)
+    assert violations == [], violations[:5]

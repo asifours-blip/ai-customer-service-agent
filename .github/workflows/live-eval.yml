@@ -12,6 +12,23 @@ on:
 jobs:
   live-eval:
     runs-on: ubuntu-latest
+    # 评测会清空业务表：只在专用评测库上运行（EVAL_DATABASE_URL，库名须以 _eval/_test 结尾，且不同于 DATABASE_URL）
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: agent_cs_eval
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/agent_cs
+      EVAL_DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/agent_cs_eval
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,6 +36,11 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -e ".[dev,rag-local]"
+      - name: Migrate eval database
+        run: DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head
+      - name: Generate ephemeral JWT secret
+        # 启动校验拒绝默认/空 JWT_SECRET；此密钥只在本次 job 运行期间存在，不落盘、不写死。
+        run: echo "JWT_SECRET=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
       - name: Run live evaluation with cost guard
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

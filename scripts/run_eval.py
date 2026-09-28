@@ -8,6 +8,15 @@
   python scripts/run_eval.py --rejudge       # Judge v2 迭代：重评 live 冻结答案（需 key）
   python scripts/run_eval.py --calibrate CALIBRATION_DIR  # κ 校准
                                              #   （需 blind_labeled.json[来自live] + judge_scores.json）
+
+评测库（必需）：EVAL_DATABASE_URL 指向独立的评测库（库名以 _eval 或 _test 结尾，且不能与 DATABASE_URL 同库），
+  评测会清空其中的业务表；未设置或不合规时拒绝运行、不删除任何数据（eval/safety.py）。
+  首次使用前先迁移：DATABASE_URL=$EVAL_DATABASE_URL alembic upgrade head
+
+知识库版本（D-021）：--kb-version dir（默认）| active | 版本号
+  dir    ：复用与 knowledge_base/ 目录内容、向量后端都一致的已校验版本，没有则导入一个新版本（只导入不发布）
+  active ：当前线上生效版本；版本号：指定版本（READY / ACTIVE / RETIRED）
+评测前只重置业务数据（用户/订单/工单/会话/Trace），知识库表不动，线上生效版本不受影响。
 """
 
 from __future__ import annotations
@@ -23,53 +32,90 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from eval.calibration import build_calibration_set, calibrate, export_blind  # noqa: E402
+from eval.converted import load_sealed_version  # noqa: E402
 from eval.cost import BudgetExceeded, estimate_cost, load_pricing, preflight_guard, reconcile_actual  # noqa: E402
 from eval.judge import LLMJudge  # noqa: E402
 from eval.loader import load_dataset  # noqa: E402
 from eval.metrics import compute_all  # noqa: E402
 from eval.report import new_payload, write_reports  # noqa: E402
 from eval.runner import reset_environment, run_all  # noqa: E402
+from eval.safety import EvalDatabaseRefused, resolve_eval_database  # noqa: E402
 
 CALIB_DIR = ROOT / "eval" / "calibration"
 
 
-def build_agent(live: bool):
-    from app.agent.service import AgentService
+def bind_eval_database() -> bool:
+    """校验 EVAL_DATABASE_URL，并把全局会话工厂改绑到评测库（seed、检索、工具调用都走它）。"""
+    try:
+        eval_url = resolve_eval_database(os.environ)
+    except EvalDatabaseRefused as exc:
+        print(f"拒绝运行评测：{exc}")
+        return False
+    from app.services import database
+
+    database.SessionLocal.configure(bind=database._engine_for(eval_url))
+    print(f"评测库：{database.SessionLocal.kw['bind'].url.render_as_string(hide_password=True)}")
+    return True
+
+
+def eval_retrieval():
+    """评测检索配置：Embedding 尊重 EMBEDDING_BACKEND（离线 bge 本地免费，D-002/D-015），阈值随后端。"""
     from app.config import get_settings
-    from app.llm.client import FakeLLMClient
-    from app.rag.answerer import RagService
     from app.rag.embedding import get_embedding_client
-    from app.tools import build_registry
 
     settings = get_settings()
+    embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
+    threshold = (
+        settings.retrieval_score_threshold_bge
+        if settings.embedding_backend == "bge"
+        else settings.retrieval_score_threshold_fake
+    )
+    return embedder, threshold
+
+
+def select_kb_version(spec: str):
+    """确定被评测的知识库版本；不合法（不存在/状态不对/后端不一致）时返回 None 并打印原因。"""
+    from eval.runner import resolve_kb_version
+
+    embedder, threshold = eval_retrieval()
+    try:
+        version = resolve_kb_version(spec, embedder, threshold)
+    except (ValueError, RuntimeError) as exc:
+        print(f"知识库版本不可评测：{exc}")
+        return None
+    print(f"评测知识库版本 v{version.id}（{version.status}，source_hash={version.source_hash[:12]}）")
+    return version
+
+
+def build_agent(live: bool, kb_version_id: int):
+    from app.agent.service import AgentService
+    from app.llm.client import FakeLLMClient
+    from app.rag.answerer import RagService
+    from app.tools import build_registry
+
     if live:
         from app.llm.deepseek import DeepseekClient
 
         llm = DeepseekClient()
-        embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
-        threshold = (
-            settings.retrieval_score_threshold_bge
-            if settings.embedding_backend == "bge"
-            else settings.retrieval_score_threshold_fake
-        )
     else:
-        llm = FakeLLMClient()
-        # 离线评测：LLM 走 Fake（零付费），Embedding 尊重 EMBEDDING_BACKEND（bge 本地免费，D-002）
-        embedder = get_embedding_client(settings.embedding_backend, settings.bge_model_name)
-        threshold = (
-            settings.retrieval_score_threshold_bge
-            if settings.embedding_backend == "bge"
-            else settings.retrieval_score_threshold_fake
-        )
-    return AgentService(llm, RagService(embedder, llm, score_threshold=threshold), build_registry())
+        llm = FakeLLMClient()  # 离线评测：LLM 走 Fake（零付费）
+    embedder, threshold = eval_retrieval()
+    # 检索固定在被评测版本上，不跟随线上 ACTIVE 切换
+    rag = RagService(embedder, llm, score_threshold=threshold, version_id=kb_version_id)
+    return AgentService(llm, rag, build_registry())
 
 
-def run(mode: str, force: bool) -> int:
-    cases = load_dataset()
+def run(mode: str, force: bool, kb_spec: str, converted_version: str | None = None) -> int:
+    if converted_version:
+        cases, manifest_sha256 = load_sealed_version(converted_version)
+    else:
+        cases, manifest_sha256 = load_dataset(), None
     chat_calls = sum(len(c.get("turns") or [1]) for c in cases)
     pricing = load_pricing()
 
     payload = new_payload(mode, {})
+    payload["dataset"] = ({"kind": "converted", "version": converted_version, "manifest_sha256": manifest_sha256}
+                          if converted_version else {"kind": "fixed", "case_count": 110})
     if mode == "live":
         est = estimate_cost(
             pricing,
@@ -93,14 +139,16 @@ def run(mode: str, force: bool) -> int:
 
     from app.services.database import SessionLocal
 
-    agent = build_agent(live=(mode == "live"))
+    version = select_kb_version(kb_spec)
+    if version is None:
+        return 2
+    agent = build_agent(live=(mode == "live"), kb_version_id=version.id)
     from app.config import get_settings as _gs
-    from app.rag.embedding import get_embedding_client as _gec
 
     db = SessionLocal()
     try:
-        print("重置评测环境（truncate → seed → ingest）...")
-        reset_environment(db, _gec(_gs().embedding_backend, _gs().bge_model_name))
+        print("重置评测业务数据（truncate 业务表 → seed；知识库表不动）...")
+        reset_environment(db)
         print(f"运行 {len(cases)} 个 case（mode={mode}）...")
         results = run_all(agent, db, cases)
     finally:
@@ -113,6 +161,7 @@ def run(mode: str, force: bool) -> int:
     payload["environment"] = {
         "llm": "deepseek-v4-flash" if mode == "live" else "fake-llm（确定性）",
         "embedding": _gs().embedding_backend,
+        "kb_version": {"id": version.id, "status": version.status, "source_hash": version.source_hash},
         "note": (
             "真实 API"
             if mode == "live"
@@ -131,7 +180,7 @@ def run(mode: str, force: bool) -> int:
         picked = build_calibration_set(results)
         judge = LLMJudge(agent.llm)
         judge_items = []
-        judge_prompt = judge_completion = 0
+        judge_prompt = judge_completion = judge_unknown = 0
         for r in picked:
             case = case_by_id[r["case_id"]]
             s = judge.score(
@@ -140,6 +189,7 @@ def run(mode: str, force: bool) -> int:
             judge_items.append({"case_id": r["case_id"], **s})
             judge_prompt += int(s.get("judge_prompt_tokens", 0))
             judge_completion += int(s.get("judge_completion_tokens", 0))
+            judge_unknown += int(bool(s.get("judge_usage_unknown")))
         (CALIB_DIR / "judge_scores.json").write_text(
             json.dumps({"items": judge_items}, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -163,6 +213,9 @@ def run(mode: str, force: bool) -> int:
         completion_tokens = sum(
             int(t.get("completion_tokens", 0) or 0) for r in results for t in r["turns"]
         )
+        unknown_calls = judge_unknown + sum(
+            int(t.get("usage_unknown_calls", 0) or 0) for r in results for t in r["turns"]
+        )
         payload["cost"] = reconcile_actual(
             pricing,
             agent_model="deepseek-v4-flash",
@@ -172,6 +225,7 @@ def run(mode: str, force: bool) -> int:
             judge_prompt_tokens=judge_prompt,
             judge_completion_tokens=judge_completion,
             estimate=payload["cost"],
+            usage_unknown_calls=unknown_calls,
         )
     else:
         payload["cost_note"] = "离线模式：FakeLLM/FakeEmbedding，零 API 费用"
@@ -191,11 +245,14 @@ def run(mode: str, force: bool) -> int:
     return 0
 
 
-def export_blind_cmd() -> int:
+def export_blind_cmd(kb_spec: str) -> int:
     from app.services.database import SessionLocal
 
     cases = load_dataset()
-    agent = build_agent(live=False)
+    version = select_kb_version(kb_spec)
+    if version is None:
+        return 2
+    agent = build_agent(live=False, kb_version_id=version.id)
     db = SessionLocal()
     try:
         reset_environment(db)
@@ -267,24 +324,31 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="真实评测（NO_PAID_API=false + DEEPSEEK_API_KEY）")
     parser.add_argument("--force", action="store_true", help="越过 preflight 软阈值（硬闸不可越）")
+    parser.add_argument("--converted-version", help="仅评测已封版的转换数据集，如 v1")
     parser.add_argument("--export-blind", action="store_true")
     parser.add_argument(
         "--rejudge", action="store_true", help="Judge v2 迭代：重评 live 冻结答案（需 key + NO_PAID_API=false）"
     )
     parser.add_argument("--calibrate", type=Path, default=None)
+    parser.add_argument(
+        "--kb-version", default="dir", help="评测的知识库版本：dir（默认，与 knowledge_base/ 一致）| active | 版本号"
+    )
     args = parser.parse_args()
 
     needs_key = args.live or args.rejudge
     if needs_key and os.environ.get("NO_PAID_API", "true").lower() == "true":
         print("live/rejudge 需要 NO_PAID_API=false 与 DEEPSEEK_API_KEY 环境变量")
         return 2
+    if (args.export_blind or not (args.rejudge or args.calibrate)) and not bind_eval_database():
+        return 2  # 会重置业务表的命令：先过评测库守卫，任何数据库操作之前
     if args.export_blind:
-        return export_blind_cmd()
+        return export_blind_cmd(args.kb_version)
     if args.rejudge:
         return rejudge_cmd()
     if args.calibrate:
         return calibrate_cmd(args.calibrate)
-    return run(mode="live" if args.live else "offline", force=args.force)
+    return run(mode="live" if args.live else "offline", force=args.force, kb_spec=args.kb_version,
+               converted_version=args.converted_version)
 
 
 if __name__ == "__main__":

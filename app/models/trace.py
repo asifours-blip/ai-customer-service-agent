@@ -2,6 +2,7 @@
 
 Phase 1 先建表；Phase 4~6 逐步填充字段。
 policy_version 双记录：RAG 政策文档版本 + 确定性业务规则版本（v1.1 补丁）。
+prompt/completion_tokens 是计费口径：usage 未知的调用按上限计入（明细见 llm_calls）。
 """
 
 from __future__ import annotations
@@ -33,6 +34,10 @@ class AgentTrace(Base):
     tool_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     tool_retries: Mapped[int | None] = mapped_column(nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 本轮每次 LLM 调用：outcome（OK / 失败类别）、耗时、attempts / retries、usage（reported / unknown / none）
+    llm_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # 回答方式：MODEL / OFFLINE_ECHO / TEMPLATE / ERROR（前端据此标注，离线回显不冒充模型回答）
+    answer_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
     prompt_tokens: Mapped[int | None] = mapped_column(nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(nullable=True)

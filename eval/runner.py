@@ -1,39 +1,82 @@
-"""评测 Runner：重置环境 → 逐 case 执行 Agent → 逐轮结果与最终 outcome。
+"""评测 Runner：选定知识库版本 → 重置业务数据 → 逐 case 执行 Agent → 逐轮结果与最终 outcome。
 
-确定性保证：每个 case 使用固定 session（eval-{case_id}），运行前全量重置
-（truncate → seed → ingest），Fake 离线链路重复执行结果可复现。
+确定性保证：每个 case 使用固定 session（eval-{case_id}），运行前重置业务数据（truncate → seed），
+检索固定在一个知识库版本上（默认：与 knowledge_base/ 目录内容一致的版本），Fake 离线链路重复执行结果可复现。
+知识库表不在重置范围内：评测从不删除、覆盖或切换线上生效版本（D-021）。
 """
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.agent.service import AgentService
+from app.models.knowledge import KbVersion
+from app.rag.embedding import EmbeddingClient
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# 评测重置绝不触碰的知识库表：版本、原文、chunk、审计
+KB_TABLES = frozenset({"kb_versions", "kb_documents", "kb_chunks", "kb_audit_log"})
+EVALUABLE_STATUSES = ("READY", "ACTIVE", "RETIRED")
 
-def reset_environment(db: Session, embedder: Any | None = None) -> None:
-    """truncate 全部表 → seed → 知识库摄取。评测确定性前提。
 
-    embedder 必须与被测 Agent 一致（离线 fake 或本地 bge），否则检索域错位。
+def reset_environment(db: Session) -> None:
+    """清空业务数据（用户/订单/工单/会话/Trace 等）→ seed。知识库表不动。
+
+    一条 TRUNCATE 覆盖全部业务表：不触发 ticket_events 的只追加行级触发器，也不需要按外键顺序逐表删除。
+    执行前校验：会话连接的必须是通过守卫的独立评测库（EVAL_DATABASE_URL），否则一行都不删（eval.safety）。
     """
     from app.models import Base
-    from app.rag import FakeEmbedding, chunk_corpus, load_corpus, rebuild_index
-    from app.rag.embedding import EmbeddingClient
+    from eval.safety import ensure_eval_target
     from scripts.seed_db import seed
 
-    emb: EmbeddingClient = embedder or FakeEmbedding()
+    ensure_eval_target(db.get_bind().engine.url, os.environ)
 
-    for table in reversed(Base.metadata.sorted_tables):
-        db.execute(table.delete())
+    tables = [t.name for t in Base.metadata.sorted_tables if t.name not in KB_TABLES]
+    db.execute(text("TRUNCATE TABLE " + ", ".join(f'"{name}"' for name in tables)))
     db.commit()
     seed()  # 使用 app SessionLocal（与 db 同库）
-    rebuild_index(db, chunk_corpus(load_corpus(ROOT / "knowledge_base")), emb)
+
+
+def resolve_kb_version(spec: str, embedder: EmbeddingClient, threshold: float) -> KbVersion:
+    """确定被评测的知识库版本。
+
+    spec = "dir"（默认）：复用内容与向量后端都与 knowledge_base/ 目录一致的已校验版本，没有则导入一个新版本（不发布）；
+    spec = "active"：当前生效版本；spec = 数字：指定版本（须为 READY / ACTIVE / RETIRED）。
+    版本的向量后端必须与评测 embedder 一致，否则检索域错位，直接拒绝。
+    """
+    from app.kb.service import Retrieval, active_version, find_or_ingest_directory
+    from app.kb.smoke import load_smoke_config
+    from app.rag.embedding import backend_name
+    from app.services import database
+
+    factory = database.SessionLocal
+    if spec == "dir":
+        retrieval = Retrieval(embedder=embedder, threshold=threshold, smoke=load_smoke_config())
+        return find_or_ingest_directory(factory, ROOT / "knowledge_base", retrieval, actor="eval")
+    with factory() as db:
+        if spec == "active":
+            version = active_version(db)
+            if version is None:
+                raise ValueError("当前没有生效的知识库版本")
+        else:
+            if not spec.isdigit():
+                raise ValueError(f"--kb-version 只接受 dir | active | 版本号，收到 {spec!r}")
+            version = db.get(KbVersion, int(spec))
+            if version is None:
+                raise ValueError(f"知识库版本 v{spec} 不存在")
+    if version.status not in EVALUABLE_STATUSES:
+        raise ValueError(f"v{version.id} 状态为 {version.status}，只能评测 {'/'.join(EVALUABLE_STATUSES)} 版本")
+    backend = backend_name(embedder)
+    if version.embedding_backend and version.embedding_backend != backend:
+        raise ValueError(f"v{version.id} 的向量后端是 {version.embedding_backend}，与评测使用的 {backend} 不一致")
+    return version
 
 
 def _failed_tools(turn: dict[str, Any]) -> list[str]:
@@ -106,6 +149,9 @@ def run_case(agent: AgentService, db: Session, case: dict[str, Any]) -> dict[str
                 "latency_ms": r.get("latency_ms", 0),
                 "prompt_tokens": r.get("prompt_tokens", 0) or 0,
                 "completion_tokens": r.get("completion_tokens", 0) or 0,
+                # 其中 usage 未知（接口没返回 / 读超时 / 响应中断）的调用数：它们的 token 已按上限计入上面两项
+                "usage_unknown_calls": r.get("usage_unknown_calls", 0) or 0,
+                "answer_mode": r.get("answer_mode"),
             }
         )
     final = turn_results[-1]

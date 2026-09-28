@@ -45,6 +45,10 @@ class AgentState(TypedDict, total=False):
     active_order_id: str | None
     active_ticket_id: str | None
     pending_action: dict[str, Any] | None  # {type, payload, id, expires_at}
+    # 结构化确认入口（POST /api/chat/confirm）：YES | NO，及卡片上的 pending_action.id；
+    # 为空时按聊天文本识别确认词。两种入口走同一 check_pending → execute_confirmed 路径
+    decision: str | None
+    expected_pending_id: str | None
     # 中间产物
     intent: str
     confirmation: str  # YES | NO | TOPIC_SWITCH
@@ -60,6 +64,8 @@ class AgentState(TypedDict, total=False):
     eligibility: dict[str, Any]
     # 输出
     final_answer: str
+    # 回答方式：MODEL（模型生成）/ OFFLINE_ECHO（离线回显）/ TEMPLATE（确定性模板）/ ERROR
+    answer_mode: str
     error_type: str | None
     # Trace 用计量
     prompt_tokens: int
@@ -82,6 +88,22 @@ def make_pending(action_type: str, payload: dict[str, Any], pending_id: str) -> 
         "payload": payload,
         "id": pending_id,
         "expires_at": (utcnow() + timedelta(minutes=PENDING_TTL_MINUTES)).isoformat(),
+    }
+
+
+def public_pending(pending: dict[str, Any] | None) -> dict[str, Any] | None:
+    """前端确认卡片所需字段；已过期视为不存在（过期的操作不能再被确认）。"""
+    if not pending or pending_expired(pending):
+        return None
+    payload = pending.get("payload") or {}
+    expires = pending["expires_at"]
+    return {
+        "id": str(pending["id"]),
+        "type": str(pending["type"]),
+        "expires_at": expires if isinstance(expires, str) else expires.isoformat(),
+        "order_id": payload.get("order_id"),
+        "category": payload.get("category"),
+        "title": payload.get("title"),
     }
 
 

@@ -18,13 +18,18 @@ htmlcov/
 
 # --- 本地产物 ---
 eval/reports/generated/
+eval/datasets/converted/.versions.lock
 data/*.sqlite3
 models_cache/
 logs/
 *.log
+backups/
 
 # --- OS / IDE ---
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+
+# --- Playwright E2E 失败产物 ---
+test-results/

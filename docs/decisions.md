@@ -62,3 +62,38 @@ router.py 词表优先级：TICKET → PRODUCT → POLICY → AFTER_SALES → LO
 **v2（修复真实缺陷）**：按 case 类别构造参考要点（注入/越权/拒答场景写明"正确行为=拒绝"；rag 给整篇 expected_document；其余给种子事实表）；多轮给完整对话链；json_mode；max_tokens 300→1200（v4-pro 是推理模型，reasoning 计入 completion，300 会在输出 JSON 前耗尽 → 4/24 空 content，实测复现）。结果 22/24，κ=0.478。分歧仅剩 mt_001/ord_001 两处 1-vs-2 宽严边界。
 **v3（原则性澄清后停止）**：明确"评分只看事实正确性与完整性，格式（DELIVERED/P001）不扣分；理由必须忠于原文"。ord_001 达成一致，但 mt_003 反向翻为 1 分 → 仍 22/24，κ=0.314。**判定为过拟合信号，停止迭代**。
 **κ 悖论分析**：人工标签 23×2+1×0 的近单一分布下，无权 κ≥0.70 数学上要求 24/24 完全一致（单条 1 分之隔 → κ≈0.65）；mt_001/mt_003 属不同人工标注者之间也未必一致的边界案例。结论：该 gate 在当前校准集上不可诚实达成；按规格执行"κ<0.70 不发布 Judge 指标"，确定性指标（任务成功/权限/注入/RAG 命中等）不依赖 Judge，不受影响。迭代全过程与三轮 judge_scores 保留在 git 历史与 calibration_report 中。
+
+## D-019 工单领取与指派规则（2026-09-28，阶段 2 工作台）
+领取：`POST /api/support/tickets/{id}/claim` 在 `SELECT ... FOR UPDATE` 行锁内判断 `assignee_id`，两名客服并发领取只有一方成功，另一方 409 `ALREADY_ASSIGNED`；本人重复领取幂等返回、不重复记事件。领取只指派不改状态，状态由领取人显式推进。可领取条件为「未指派且未 CLOSED」——新流程下只有 OPEN 会处于未指派，放宽到非 CLOSED 是为了让迁移前遗留的 PROCESSING/RESOLVED 未指派工单仍有人能接手。
+指派人鉴权：状态迁移与客服回复都要求 `assignee_id == 当前客服`（未领取/他人领取 → 403），CLOSED 后双方都不能回复（409 `INVALID_STATE`）。
+**不支持转交**：客服之间自行转交会让责任边界模糊，且需要额外的「被转交方是否接受」语义；当前没有主管角色，暂不开放。若后续需要，建议新增 SUPPORT_LEAD 角色的 reassign 接口（同样走行锁 + 事件记录），而不是让领取人自行释放。
+反馈：RESOLVED/CLOSED 后客户本人可评分一次（1–5 + 评论），重复 409 `DUPLICATE`，不支持修改（评测集需要不可变样本）；行锁串行化 + `ticket_feedback_ticket_id_key` 唯一约束兜底。
+处理记录：`ticket_events` 只追加，与业务写入同事务提交；DB 触发器拒绝 UPDATE/DELETE（测试清库用 TRUNCATE，不触发行级触发器）。客户视图隐藏内部字段：`assignee_id`、客服回复的 `author_id`、客服事件的 `actor_id`。
+
+## D-020 确认卡片复用 graph 确认路径（2026-09-28，阶段 2 工作台）
+原确认入口只有聊天发「确认」（`detect_confirmation` 正则）。新增 `POST /api/chat/confirm {session_id, pending_action_id, decision}` 供前端卡片使用，但**不另写执行路径**：API 只把 decision（YES/NO）和卡片上的 pending id 放进同一张图的初始状态；`check_pending` 先校验该 id 仍是会话当前 pending 且未过期（否则 STALE：不执行、不清除当前 pending），再与文本确认一样进入 `execute_confirmed`（REVALIDATE 权限与资格 → `create_ticket` 以 `pending_action.id` 为幂等键）。会话历史中记录为「确认」/「取消」，与手输一致；卡片与聊天两种入口可以混用，幂等键相同。
+
+## D-021 知识库版本管理：草稿 / 发布 / 回滚与引用追溯（2026-09-28，阶段 3）
+背景：原流程每次启动 `delete(KbChunk)` 后全量重建；chunk_id 全局唯一、无版本字段。核查结论：删除与插入同一事务，embedding 异常时不会提交，所以「失败即清空」只在语料为空时成立；但文档一改旧回答的引用就找不到当时原文、没有草稿与发布之分、评测重置会清掉线上知识库，这些问题确实存在。
+数据模型：`kb_versions`（状态 CHECK、来源哈希、创建人、向量后端、进度、校验结果、失败原因）、`kb_documents`（每版本原文 + sha256）、`kb_audit_log`（只追加：与 ticket_events 同样用行级触发器拒绝 UPDATE/DELETE，阶段 3 审阅后追加，迁移 a6c3e8b2d417）；`kb_chunks.version_id` 非空，唯一键 `(version_id, chunk_id)`。迁移把现有 chunk 归入自动创建的 v1（ACTIVE，source=MIGRATION）；旧流程没存原文，v1 无文档行，来源哈希取 chunk 内容哈希。**空知识库不建 v1**，否则启动初始化会因「已有生效版本」而跳过。降级只能保留 ACTIVE 版本的 chunk（结构所限，有损）。
+单一 ACTIVE：部分唯一索引 `uq_kb_versions_single_active`（`WHERE status='ACTIVE'`）在数据库层兜底。发布/回滚：单事务内先取全局 advisory lock 串行化，再比较调用方给出的 `expected_active_version_id` 与实际生效版本（不一致 409），然后「旧 ACTIVE → RETIRED（flush）→ 目标 → ACTIVE → 审计」一次提交。选择比较交换而不是「后到者覆盖」：只串行化的话，稍晚到的并发请求会在不知情的情况下覆盖前一个发布；比较交换下两个基于同一生效版本的发布恰好一个成功，与到达时间无关。
+导入：上传同步校验（只收 .md、单文件 200 KB / 50 个 / 总 2 MB、UTF-8、必需 front matter、纯文件名防路径穿越、document_id 重复），任一不过整体 400 并逐条列出文件与检查项；通过后落草稿，BackgroundTasks 后台导入。导入期间持有事务级 advisory lock `(72001, version_id)`；chunk 行与校验同事务写入，校验不过回滚，失败版本不留 chunk。合并上传以当前 ACTIVE 的文档原文为底；迁移归档的 v1 没有原文，合并会得到「只有本次上传文件」的版本，因此后端对这种情况返回 400（check=mode），管理页禁用合并并提示只能完整替换。READY 前检查 chunk 数量（每篇至少 1）、向量维度（512 且为有限值）与冒烟查询（`kb_smoke_queries.yaml`，期望文档须在 top3 且分数过线上拒答阈值）。导入只写新版本，从不改动 ACTIVE。
+重启恢复：应用启动（lifespan）时，对创建早于宽限期（`KB_RECOVER_GRACE_MINUTES`，默认 10 分钟）的 DRAFT/INGESTING 版本逐个 `pg_try_advisory_xact_lock`，拿得到锁（没有存活连接在导入）才标 FAILED；导入进程被杀后连接断开、锁自动释放。宽限期（阶段 3 审阅后追加）消除了多实例下「别的实例刚提交 DRAFT、后台任务尚未取锁」被误标的窗口；代价是真正中断的版本最多要等宽限期过后的下一次启动才被标记（期间只是停在 DRAFT/INGESTING，不可检索也不可发布，不影响线上）。
+检索与引用：`store.search` 默认只 join ACTIVE 版本；引用来源增加 `version_id`，`GET /api/traces/{id}/citations` 按 `(version_id, chunk_id)` 取回原文（版本 RETIRED 仍可查）；版本化之前的旧 trace 没有版本号，接口如实返回「无法追溯」，不按 chunk_id 猜。
+向量后端：聊天检索、后台导入、启动初始化统一用 `serving_retrieval()`（离线开关下固定 FakeEmbedding），版本记录 `embedding_backend`，发布时与当前服务不一致则拒绝，评测时与评测 embedder 不一致也拒绝。
+启动与评测：entrypoint 改为 `bootstrap_kb.py`，仅在没有 ACTIVE 时导入 `knowledge_base/` 并生效（失败则容器启动失败）。`run_eval.py --kb-version dir|active|N`：dir 复用内容哈希与后端都一致的已校验版本、没有则导入新版本但不发布；评测检索固定在所选版本。评测重置只 TRUNCATE 业务表，知识库四张表不在范围内（顺带修复：原逐表 DELETE 会被 ticket_events 的只追加触发器拒绝）。
+评测库守卫（阶段 3 审阅后追加）：评测会清空业务表，目标库只读自 `EVAL_DATABASE_URL`；未设置、与 `DATABASE_URL` 同库（规范化 host/port/dbname 后比较：主机不分大小写、localhost≡127.0.0.1≡::1、缺省端口 5432，与驱动名和用户名无关）、或库名不以 `_eval`/`_test` 结尾，一律拒绝运行且不连接任何库；CLI 通过后把全局会话工厂改绑到评测库。`reset_environment` 自身再校验一次「会话实际连接的库 = 通过守卫的评测库」，绕过 CLI 直接调用也删不到应用库。
+权限：新角色 KB_ADMIN（种子 `kb_admin`），`/api/kb/*` 全部仅限该角色，客户与客服 403。
+
+## D-022 外部接口准备：错误分类、重试、usage 未知与配置状态（2026-09-28，阶段 4）
+核查现状：离线模式下意图分类是规则（`RuleBasedIntentClassifier`，线上从未接 LLM 分类器）；订单/物流/工单/售后/澄清/转人工/拒答全是确定性模板；只有 RAG 生成与寒暄经过 LLM，而离线 LLM 是 `FakeLLMClient`——把 user prompt（RAG 下即检索到的知识库原文）截断回显，并非生成。此前这些回答在界面上与模型回答没有区别。`NO_PAID_API=false` 但缺 key 时，`DeepseekClient.complete()` 抛 `ValidationFailedError`，被 `AgentService` 的通用兜底吞成「系统内部出现异常」（HTTP 200），不发请求但也不说明原因。
+决策：
+- **同一套代码**：真实模式只替换 LLM 客户端，Agent 图、RagService、Trace 落库完全共用；`DeepseekClient` 通过注入 `http_client`/`sleep` 用本地替身测试，不另写「真实模式流程」。
+- **异常层级**（`app/llm/errors.py`）：未配置 / 鉴权 401·403 / 限流 429 / 服务端 5xx / 其他 4xx / 连接超时（含 TLS 握手）/ 连接失败 / 读超时 / 响应中断 / 坏响应（非 JSON、缺字段、类型不对、未知 finish_reason）/ 截断（length）/ 过滤（content_filter）。上下文含状态码、请求 id、Retry-After、attempts、usage；消息由客户端拼写，**不回显上游响应体**（服务商 401 文案常带部分 key），异常 `from None` 不链接 httpx 原始异常；key 以 `SecretStr` 保存，配置对象被打印也只显示 `**********`。
+- **重试**：只重试 429 / 5xx / 连接失败 / 连接超时（请求未被处理，重发不重复计费）；指数退避 `LLM_RETRY_BASE_SECONDS·2^(n-1)`（封顶 `LLM_RETRY_MAX_SECONDS`），有 Retry-After 至少等它，超过 `LLM_RETRY_AFTER_MAX_SECONDS` 直接失败（不阻塞请求线程）；次数 `LLM_MAX_RETRIES`。读超时、响应中断、写到一半断开**不重试**：请求可能已被处理并计费。
+- **usage 未知按上限计**：`LLMUsage.status` = reported / unknown / none。接口没返回 usage、读超时、响应中断、200 但无法解析时记 unknown，token 取上限：输入 ≤ UTF-8 字节数 + 32（字节级 BPE 的 token 数不超过字节数）、输出 ≤ max_tokens。Trace 的 prompt/completion_tokens 改为各次调用记录之和（计费口径），评测 `reconcile_actual` 沿用 token 求和并单独报告 `usage_unknown_calls`；judge 调用失败也按同一规则记账。顺带修正：售后节点为取政策而调用的 RAG 生成此前不计入 Trace token，现按调用记录计入。
+- **缺配置不回退**：`NO_PAID_API=false` 时 `get_settings()` 一次列出全部缺口（key、base_url 合法且公网必须 https、MODEL_NAME、非默认 JWT_SECRET）并拒绝启动；运行期客户端仍自检，缺配置抛 `LLMNotConfiguredError`、0 请求。聊天接口对模型失败 / 知识库需重建返回 503（`detail.type`=MODEL_NOT_CONFIGURED / MODEL_CALL_FAILED / KB_REBUILD_REQUIRED + `category` + `trace_id`，message 为用户可读提示），不改用模板或回显答案；该轮消息与 Trace 照常落库（answer_mode=ERROR）。不经过模型的工具路由不受影响。
+- **回答方式标识**：离线的回显与模板是既定设计，保留，但每条回答带 `answer_mode`（MODEL / OFFLINE_ECHO / TEMPLATE / ERROR），存入 Trace，前端逐条显示，刷新后从 Trace 取回。
+- **配置状态**：`GET /api/system/config`（仅 KB_ADMIN，项目里唯一的管理员角色）与启动日志共用 `config_status()`：模型名、base_url 主机、key 是否已设置、NO_PAID_API、实际生效/配置的 embedding 后端、BGE 是否就绪（只读检查，不加载模型、不联网）。
+- **BGE 接线**：删除默认 `HF_ENDPOINT=hf-mirror.com`（第三方镜像的供应链风险），仅当 `HF_ENDPOINT` 显式配置（含 .env）时在导入 huggingface_hub 前写入进程环境；`BGE_MODEL_PATH` 指定本地目录时只从该目录加载（`local_files_only`），目录不存在或不完整明确报错、不下载；`HF_HUB_OFFLINE` 时缓存缺失同样明确报错。检索前比对查询向量维度与版本导入时记录的维度（`checks.embedding_dim`，旧版本以列宽 512 为准），不一致抛 `KB_REBUILD_REQUIRED` 拒绝检索。
+Trace：`agent_traces` 新增 `llm_calls`（JSON，每次调用的 outcome、耗时、attempts/retries、usage、状态码、请求 id）与 `answer_mode`（迁移 b7d2f4e9c813，旧记录为 NULL，不回填）。

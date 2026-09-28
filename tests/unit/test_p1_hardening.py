@@ -44,6 +44,8 @@ def test_p1a_live_mode_with_custom_secret_ok(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setenv("NO_PAID_API", "false")
     monkeypatch.setenv("JWT_SECRET", "a" * 32)
+    # 阶段 4：live 模式启动还要求 DEEPSEEK_API_KEY 等齐全（见 test_live_config.py）；这里只验证 JWT 守卫放行
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-placeholder-not-real")
     _settings_env(monkeypatch)
     try:
         assert config.get_settings().jwt_secret == "a" * 32

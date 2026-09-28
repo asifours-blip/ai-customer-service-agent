@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import mimetypes
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -12,9 +16,35 @@ from app import __version__
 from app.api import api_router
 from app.services.errors import AppError, to_error_dict
 
+# 前端用原生 ES modules：浏览器要求 JS MIME 类型严格正确。
+# Windows 注册表可能把 .js 映射为 text/plain，这里显式固定，避免模块脚本被拒绝加载。
+mimetypes.add_type("text/javascript", ".js")
+
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # 先校验配置再碰数据库：live 模式（NO_PAID_API=false）缺 key / base_url / JWT_SECRET 等直接启动失败
+    from app.config import get_settings
+    from app.services.config_status import log_startup_status
+
+    log_startup_status(get_settings())
+
+    # 进程启动：上一个进程崩溃/重启残留的 DRAFT/INGESTING 版本（没有存活连接持有导入锁）→ FAILED
+    from app.kb.service import recover_interrupted
+    from app.services import database
+
+    recovered = recover_interrupted(database.SessionLocal)
+    if recovered:
+        logger.warning("重启恢复：知识库版本 %s 导入未完成，已标记 FAILED", recovered)
+    yield
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
+        lifespan=lifespan,
         title="Agent + RAG 智能客服与工单自动化平台",
         version=__version__,
         description="受控 Agent · 权限隔离 · 幂等工具 · LLM 评测 · CI",
@@ -32,7 +62,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(AppError)
     def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
-        return JSONResponse(status_code=exc.http_status, content={"detail": to_error_dict(exc)})
+        return JSONResponse(status_code=exc.http_status, content={"detail": {**to_error_dict(exc), **exc.extra()}})
 
     app.include_router(api_router)
     return app
