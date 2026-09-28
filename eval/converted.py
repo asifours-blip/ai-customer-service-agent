@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 import re
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
