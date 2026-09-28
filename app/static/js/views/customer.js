@@ -111,12 +111,40 @@ function eligibilityEl(e) {
     h('p', { class: 'muted small' }, '由业务规则确定性计算，非模型生成。'));
 }
 
+// 回答方式：离线回显与模板回复必须明示，不能让用户以为是模型生成的
+const ANSWER_MODE_LABEL = {
+  MODEL: '模型生成',
+  OFFLINE_ECHO: '离线演示：未调用模型，内容为知识库原文回显',
+  TEMPLATE: '系统模板回复（非模型生成）',
+  ERROR: '本轮未能生成回答',
+};
+
+function answerModeEl(mode) {
+  if (!mode) return null;
+  return h('div', { class: `answer-mode answer-mode-${mode.toLowerCase()}`, 'data-testid': 'answer-mode', dataset: { mode } },
+    ANSWER_MODE_LABEL[mode] || mode);
+}
+
 function messageEl(role, content, extra = {}) {
   const body = role === 'assistant' ? linkifyTickets(content, ticketHref) : [content];
-  return h('div', { class: `msg msg-${role}`, 'data-testid': `msg-${role}` },
+  const isError = role === 'assistant' && extra.answer_mode === 'ERROR';
+  return h('div', { class: `msg msg-${role}${isError ? ' msg-failed' : ''}`, 'data-testid': `msg-${role}` },
     h('div', { class: 'msg-body' }, body),
+    role === 'assistant' ? answerModeEl(extra.answer_mode) : null,
     role === 'assistant' ? sourcesEl(extra.sources, extra.trace_id) : null,
     role === 'assistant' ? eligibilityEl(extra.eligibility) : null);
+}
+
+// 聊天接口 503：后端给的是用户可读提示（模型未配置 / 限流 / 超时 / 知识库维护…），内部细节只在 Trace
+function chatErrorEl(err) {
+  const d = err instanceof ApiError ? err.detail : null;
+  const known = d && d.category && d.message;
+  const text = known ? d.message : err instanceof ApiError && err.status >= 500
+    ? '服务暂时不可用，请稍后再试。'
+    : `请求失败：${err.message}`;
+  return h('div', {
+    class: 'msg msg-error', 'data-testid': 'chat-error', dataset: { category: known ? d.category : '' },
+  }, notice('error', text), known && d.trace_id ? h('p', { class: 'muted small' }, `Trace：${d.trace_id}`) : null);
 }
 
 function basisPanel(resp) {
@@ -127,6 +155,8 @@ function basisPanel(resp) {
     h('dl', { class: 'kv' },
       h('div', {}, h('dt', {}, '路由'), h('dd', {}, resp.route || '—')),
       h('div', {}, h('dt', {}, '意图'), h('dd', {}, resp.intent || '—')),
+      h('div', {}, h('dt', {}, '回答方式'), h('dd', { 'data-testid': 'basis-answer-mode' },
+        ANSWER_MODE_LABEL[resp.answer_mode] || resp.answer_mode || '—')),
       h('div', {}, h('dt', {}, '耗时'), h('dd', { class: 'num' }, `${resp.latency_ms} ms`)),
       h('div', {}, h('dt', {}, '工具'), h('dd', {},
         resp.tool_calls.length ? resp.tool_calls.map((t) => `${t.tool}${t.ok ? '' : '（失败）'}`).join('、') : '无')),
@@ -230,7 +260,8 @@ export async function renderChat(main, { params, isStale }) {
       showResponse(await request());
       if (!existing) refreshList();
     } catch (err) {
-      list.append(h('div', { class: 'msg msg-error' }, notice('error', `请求失败：${err.message}`)));
+      list.append(chatErrorEl(err));
+      scrollDown();
     } finally {
       setBusy(false);
     }
@@ -268,7 +299,7 @@ export async function renderChat(main, { params, isStale }) {
 
   if (detail) {
     for (const m of detail.messages) {
-      list.append(messageEl(m.role, m.content, { sources: m.sources, trace_id: m.trace_id }));
+      list.append(messageEl(m.role, m.content, { sources: m.sources, trace_id: m.trace_id, answer_mode: m.answer_mode }));
     }
     renderCard(detail.pending_action);
   }

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -39,17 +40,12 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-@pytest.fixture(scope="session")
-def live_server(db_engine) -> Iterator[str]:  # noqa: ANN001
-    """会话级：在已迁移的测试库上启动真实 uvicorn（离线开关：FakeLLM + FakeEmbedding）。"""
+@contextmanager
+def run_uvicorn(extra_env: dict[str, str]) -> Iterator[tuple[str, Path]]:
+    """在已迁移的测试库上启动真实 uvicorn 子进程，返回 (地址, 日志文件)；退出时终止进程。"""
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
-    env = {
-        **os.environ,
-        "DATABASE_URL": TEST_DATABASE_URL,
-        "NO_PAID_API": "true",
-        "EMBEDDING_BACKEND": "fake",
-    }
+    env = {**os.environ, "DATABASE_URL": TEST_DATABASE_URL, **extra_env}
     log = tempfile.NamedTemporaryFile(prefix="csagent-e2e-", suffix=".log", delete=False)  # noqa: SIM115
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
@@ -71,11 +67,18 @@ def live_server(db_engine) -> Iterator[str]:  # noqa: ANN001
             if time.monotonic() > deadline:
                 raise RuntimeError(f"uvicorn 30s 内未就绪，日志见 {log.name}")
             time.sleep(0.3)
-        yield base
+        yield base, Path(log.name)
     finally:
         proc.terminate()
         proc.wait(timeout=10)
         log.close()
+
+
+@pytest.fixture(scope="session")
+def live_server(db_engine) -> Iterator[str]:  # noqa: ANN001
+    """会话级：在已迁移的测试库上启动真实 uvicorn（离线开关：FakeLLM + FakeEmbedding）。"""
+    with run_uvicorn({"NO_PAID_API": "true", "EMBEDDING_BACKEND": "fake"}) as (base, _log):
+        yield base
 
 
 @pytest.fixture()
