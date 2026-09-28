@@ -316,6 +316,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .kb-upload-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .kb-upload-row input[type=file] { width: auto; flex: 1 1 260px; font-size: 14px; }
 .kb-upload-result:not(:empty) { margin-top: 12px; }
+.kb-merge-hint { margin: 0 0 12px; background: var(--status-processing-bg); color: var(--status-processing-fg); }
 .kb-errors-title { margin: 0 0 4px; }
 .kb-errors { margin: 0; padding-left: 18px; }
 .kb-list { margin-top: 16px; }

@@ -563,3 +563,31 @@ def test_eval_reset_keeps_kb_and_resolves_directory_version(db, monkeypatch) -> 
         resolve_kb_version(str(new_version(db, {"x.md": TRADEIN_MD}, mode="replace").id), FakeEmbedding(), 0.22)
     with pytest.raises(ValueError, match="不存在"):
         resolve_kb_version("999", FakeEmbedding(), 0.22)
+
+
+# ---------------------------------------------------------------- 迁移归档版本：只允许完整替换
+
+
+def _make_active_like_migrated(db) -> None:  # noqa: ANN001
+    """模拟迁移归档的 v1：生效中，但没有保存文档原文（旧流程只存了 chunk）。"""
+    with db() as s:
+        s.execute(text("DELETE FROM kb_documents WHERE version_id = 1"))
+        s.execute(text("UPDATE kb_versions SET doc_count = 0, source = 'MIGRATION' WHERE id = 1"))
+        s.commit()
+
+
+def test_merge_upload_refused_when_active_version_has_no_documents(db, client: TestClient) -> None:  # noqa: ANN001
+    _make_active_like_migrated(db)
+    admin = auth_headers(client, "kb_admin")
+    resp = _upload(client, admin, [("policy-tradein.md", TRADEIN_MD)], mode="merge")
+    assert resp.status_code == 400, resp.text
+    [err] = resp.json()["detail"]["errors"]
+    assert (err["file"], err["check"]) == ("*", "mode") and "完整替换" in err["message"]
+    with db() as s:
+        assert s.scalar(select(func.count()).select_from(KbVersion)) == 1  # 没有创建任何版本
+
+    corpus = sorted((ROOT / "knowledge_base").rglob("*.md"))
+    full = _upload(client, admin, [(p.name, p.read_bytes()) for p in corpus] + [("policy-tradein.md", TRADEIN_MD)],
+                   mode="replace")
+    assert full.status_code == 202, full.text
+    assert status_of(db, full.json()["id"]) == "READY"

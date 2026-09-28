@@ -124,6 +124,19 @@ def merge_with_active(db: Session, uploaded: list[ValidDocument]) -> list[ValidD
     active = active_version(db)
     if active is None:
         return uploaded
+    has_originals = db.scalar(select(KbDocument.id).where(KbDocument.version_id == active.id).limit(1))
+    if has_originals is None:
+        # 迁移归档的版本只有 chunk、没有文档原文：合并会得到「只有本次上传文件」的版本，与管理员预期不符
+        raise UploadRejected(
+            [
+                FileError(
+                    "*",
+                    "mode",
+                    f"当前生效版本 v{active.id} 没有保存文档原文（版本化之前迁移归档），不能作为合并底稿；"
+                    "请选择「完整替换」并上传全部文档",
+                )
+            ]
+        )
     replaced = {d.document_id for d in uploaded}
     base = [
         ValidDocument(

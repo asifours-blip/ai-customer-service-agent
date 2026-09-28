@@ -111,3 +111,18 @@ def test_upload_rejection_is_shown_per_file_and_non_admin_is_forbidden(
     for username in ("demo_customer", "support_agent"):
         resp = httpx.get(f"{app_url}/api/kb/versions", headers=api_headers(app_url, username))
         assert resp.status_code == 403
+
+
+def test_merge_disabled_when_active_version_is_migrated_without_originals(page: Page, app_url: str, db) -> None:  # noqa: ANN001
+    from sqlalchemy import text
+
+    with db() as s:  # 模拟迁移归档的 v1：只有 chunk、没有文档原文
+        s.execute(text("DELETE FROM kb_documents WHERE version_id = 1"))
+        s.execute(text("UPDATE kb_versions SET doc_count = 0, source = 'MIGRATION' WHERE id = 1"))
+        s.commit()
+    ui_login(page, app_url, "kb_admin", "#/kb")
+    page.wait_for_url("**/#/kb")
+    mode = page.get_by_test_id("kb-mode")
+    expect(mode).to_have_value("replace")
+    expect(mode.locator("option[value=merge]")).to_be_disabled()
+    expect(page.get_by_test_id("kb-merge-hint")).to_contain_text("只能完整替换")

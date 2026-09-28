@@ -46,6 +46,7 @@ function uploadErrors(err) {
     }, h('span', { class: 'mono' }, e.file === '*' ? '整体' : e.file), `：${e.message}`))));
 }
 
+// 返回 { el, setBase }：setBase(当前生效版本) 在列表刷新时调用，决定能否「合并上传」
 function uploadPanel(onCreated) {
   const input = h('input', {
     type: 'file', multiple: true, accept: '.md,text/markdown', 'data-testid': 'kb-files', 'aria-label': '选择 .md 文件',
@@ -53,9 +54,21 @@ function uploadPanel(onCreated) {
   const mode = h('select', { 'data-testid': 'kb-mode', 'aria-label': '上传方式' },
     h('option', { value: 'merge' }, '合并到当前生效版本（按 document_id 覆盖或新增）'),
     h('option', { value: 'replace' }, '完整替换（新版本只包含本次上传的文件）'));
+  const mergeOption = mode.querySelector('option[value=merge]');
+  const hint = h('p', { class: 'notice kb-merge-hint', 'data-testid': 'kb-merge-hint', hidden: true });
   const result = h('div', { class: 'kb-upload-result' });
   const submit = h('button', { class: 'btn btn-primary', type: 'submit', 'data-testid': 'kb-upload' }, '上传并导入');
-  return h('form', {
+  // 迁移归档的版本没有文档原文，不能作为合并底稿（后端同样会拒绝）：只允许完整替换
+  function setBase(active) {
+    const noOriginals = Boolean(active) && active.doc_count === 0;
+    mergeOption.disabled = noOriginals;
+    if (noOriginals) {
+      mode.value = 'replace';
+      hint.textContent = `当前生效版本 v${active.id} 是迁移归档的数据，没有保存文档原文，只能完整替换：请上传全部文档。`;
+    }
+    hint.hidden = !noOriginals;
+  }
+  const el = h('form', {
     class: 'panel',
     onsubmit: async (e) => {
       e.preventDefault();
@@ -85,8 +98,10 @@ function uploadPanel(onCreated) {
     '只接受 UTF-8 编码、带 front matter（document_id、document_name、category、policy_version）的 .md 文件，'
     + '单个不超过 200 KB，一次最多 50 个。导入在后台进行，并自动检查 chunk 数量、向量维度和冒烟查询；'
     + '全部通过才会变成「待发布」，发布前不会被客户检索到。'),
+  hint,
   h('div', { class: 'kb-upload-row' }, input, mode, submit),
   result);
+  return { el, setBase };
 }
 
 export async function renderKbVersions(main, { isStale }) {
@@ -148,6 +163,7 @@ export async function renderKbVersions(main, { isStale }) {
     if (isStale()) return;
     activeId = data.active_version_id;
     const active = data.versions.find((v) => v.id === activeId);
+    upload.setBase(active);
     clear(banner, active
       ? [h('span', {}, '当前生效：'), h('a', { href: versionHref(active.id), class: 'mono' }, `v${active.id}`),
         h('span', { class: 'muted' }, ` · ${SOURCE_LABEL[active.source] || active.source} · ${contentText(active)} · 生效于 ${fmtTime(active.activated_at)}`)]
@@ -162,10 +178,11 @@ export async function renderKbVersions(main, { isStale }) {
     if (data.versions.some((v) => IN_PROGRESS.has(v.status))) timer = setTimeout(() => { if (!isStale()) refresh(); }, POLL_MS);
   }
 
+  const upload = uploadPanel(() => refresh());
   clear(main, h('div', { class: 'page' },
     h('div', { class: 'page-head' }, h('h1', {}, '知识库版本')),
     banner,
-    uploadPanel(() => refresh()),
+    upload.el,
     h('section', { class: 'kb-list' }, flash, tableSlot)));
   await refresh();
 }
