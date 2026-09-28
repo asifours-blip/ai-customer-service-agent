@@ -141,7 +141,7 @@ def convert_feedback_to_eval_case(
     note: str,
 ) -> tuple[AnswerFeedback, dict[str, Any]]:
     """把一条待审反馈转成评测用例，写入独立的带版本号数据文件（不改动固定 110 条数据集）。"""
-    from eval.converted import CURRENT_VERSION, append_case, next_case_id
+    from eval.converted import append_new_case
 
     feedback = db.get(AnswerFeedback, feedback_id)
     if feedback is None:
@@ -151,9 +151,7 @@ def convert_feedback_to_eval_case(
     if not item["question"]:
         raise InvalidStateError(f"反馈 {feedback_id} 找不到对应的用户提问，无法转成评测用例")
 
-    case_id = next_case_id(CURRENT_VERSION)
     case: dict[str, Any] = {
-        "case_id": case_id,
         "category": category,
         "user_id": feedback.user_id,
         "input": item["question"],
@@ -170,7 +168,8 @@ def convert_feedback_to_eval_case(
     if item["route"]:
         case["expected_intent"] = item["route"]
 
-    append_case(case, version=CURRENT_VERSION)
+    version = append_new_case(case)
+    case_id = case["case_id"]
 
     feedback.review_status = FEEDBACK_STATUS_CONVERTED
     feedback.reviewed_by = actor_id
@@ -180,7 +179,7 @@ def convert_feedback_to_eval_case(
             feedback_id=feedback.id,
             action=REVIEW_ACTION_CONVERT,
             actor=actor_id,
-            detail={"case_id": case_id, "version": CURRENT_VERSION, "note": note or None},
+            detail={"case_id": case_id, "version": version, "note": note or None},
         )
     )
     db.commit()

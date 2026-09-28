@@ -6,15 +6,15 @@
 
 模拟真实企业售后客服：用户提问 → 意图识别 → 受控 Agent 决策（RAG 知识问答 / 订单物流工单工具调用 / 售后资格确定性判定 / 转人工）→ 后端权限校验 → 执行 → 带引用的回答或诚实拒答 → 全链路 Trace → 自动化评测（110 条评测集 + LLM Judge + 人工盲标校准）。
 
-**状态：Phase 0~9 全部完成。默认质量门禁以 CI 与 `pytest --collect-only` 为准；真实 PostgreSQL 集成与 Ticket 并发回归在独立 CI job 执行。**
+**状态：客户端、客服工作台、知识库版本管理与反馈转评测已实现；隔离验证范围、真实模型待验证项和最小接入配置见[三档状态](#status-tiers)。**
 
 ## Repository history
 
-2026-08-23 是首次将已完成模块按功能切片入库的记录，并非线上迭代节奏。2026-08-24 的 PostgreSQL sequence 修复是公开后的真实 Ticket ID 并发缺陷；根因、最小修复与回归证据见 [Ticket concurrency case study](docs/ticket-concurrency-case-study.md)。当前行为以 `main` 和 GitHub Actions 为准。
+2026-08-23 是首次将已完成模块按功能切片入库的记录，并非线上迭代节奏。2026-08-24 的 PostgreSQL sequence 修复是公开后的真实 Ticket ID 并发缺陷；根因、最小修复与回归证据见 [Ticket concurrency case study](docs/ticket-concurrency-case-study.md)。已发布状态以 `main` 和 GitHub Actions 为准；本地未发布分支的验收见对应提交。
 
 | Demo 1 · RAG 引用 | Demo 4 · 售后确认+幂等 | Demo 5 · 越权拦截 |
 |---|---|---|
-| ![RAG](docs/assets/demo1_rag_citation.png) | ![售后](docs/assets/demo4_aftersales_confirm.png) | ![越权](docs/assets/demo5_idor_blocked.png) |
+| ![RAG](docs/assets/chat_citation.png) | ![售后](docs/assets/pending_confirmation.png) | ![越权](docs/assets/customer_idor_denied.png) |
 
 ## 核心设计决策与评测结果
 
@@ -89,13 +89,15 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 | `support_agent2` | 客服 SUPPORT002 | 第二名客服（领取竞争） |
 | `kb_admin` | 知识库管理员 KBADMIN001 | 上传 / 发布 / 回滚知识库版本（`#/kb`） |
 
-### 反馈进评测、部署与恢复（`feat/feedback-eval-ops`）
+<a id="status-tiers"></a>
+
+### 反馈进评测、部署与恢复
 
 三档现状，如实分开（代码写完 ≠ 隔离测试通过 ≠ 真实联调通过）：
 
 **已实现且隔离验证通过的（真实 PostgreSQL 集成测试 / 本机真实 Docker 演练，非模拟）：**
 - 回答反馈：客户对每条 assistant 回答标「有帮助/没帮助」（`POST /api/feedback/{message_id}`），同一用户对同一条回答只能提交一次（唯一约束兜底）；SUPPORT 角色的审核队列（`GET /api/feedback/admin/queue`）一次性给出问题、回答、RAG 引用、知识库版本、trace_id；审核动作写进只追加的 `feedback_review_audit`（DB 触发器拒绝 UPDATE/DELETE，与 `kb_audit_log`/`ticket_events` 同做法）。见 `tests/integration/test_answer_feedback.py`。
-- 转评测用例：审核通过把用例写进独立的、带版本号的数据文件 `eval/datasets/converted/v1.jsonl`，字段对齐 `eval/loader.py`；固定 110 条数据集（`eval/datasets/*.jsonl`）分毫不动，测试里逐行断言过。
+- 转评测用例：审核通过写入 `eval/datasets/converted/vN.jsonl` 当前开放版；`python scripts/seal_converted.py --actor support_agent` 封版并生成含逐行与整文件 SHA-256 的 manifest，后续用例进入下一版。评测用 `python scripts/run_eval.py --converted-version vN` 显式加载已封版快照，报告记录版本及 manifest SHA-256；固定 110 条数据集（`eval/datasets/*.jsonl`）仍走默认评测路径。
 - 知识库版本对比：`scripts/run_kb_diff.py` 复用评测执行器，让同一组样本分别在版本 A/B 上跑，输出逐题差异报告；本机真实跑过一次（详见 `docs/evaluation.md`「知识库版本对比」）。
 - 售后节点不再多打一次白付费的 RAG 生成调用（`app/rag/answerer.py` 的 `generate=False`），回归测试直接查 Trace 断言 LLM 调用次数为 0（此前是 1）。
 - `live-eval.yml` 的 `JWT_SECRET` 改成每次运行随机生成，不再写死/缺失导致启动校验拒绝。

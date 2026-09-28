@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from eval.calibration import build_calibration_set, calibrate, export_blind  # noqa: E402
+from eval.converted import load_sealed_version  # noqa: E402
 from eval.cost import BudgetExceeded, estimate_cost, load_pricing, preflight_guard, reconcile_actual  # noqa: E402
 from eval.judge import LLMJudge  # noqa: E402
 from eval.loader import load_dataset  # noqa: E402
@@ -104,12 +105,17 @@ def build_agent(live: bool, kb_version_id: int):
     return AgentService(llm, rag, build_registry())
 
 
-def run(mode: str, force: bool, kb_spec: str) -> int:
-    cases = load_dataset()
+def run(mode: str, force: bool, kb_spec: str, converted_version: str | None = None) -> int:
+    if converted_version:
+        cases, manifest_sha256 = load_sealed_version(converted_version)
+    else:
+        cases, manifest_sha256 = load_dataset(), None
     chat_calls = sum(len(c.get("turns") or [1]) for c in cases)
     pricing = load_pricing()
 
     payload = new_payload(mode, {})
+    payload["dataset"] = ({"kind": "converted", "version": converted_version, "manifest_sha256": manifest_sha256}
+                          if converted_version else {"kind": "fixed", "case_count": 110})
     if mode == "live":
         est = estimate_cost(
             pricing,
@@ -318,6 +324,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="真实评测（NO_PAID_API=false + DEEPSEEK_API_KEY）")
     parser.add_argument("--force", action="store_true", help="越过 preflight 软阈值（硬闸不可越）")
+    parser.add_argument("--converted-version", help="仅评测已封版的转换数据集，如 v1")
     parser.add_argument("--export-blind", action="store_true")
     parser.add_argument(
         "--rejudge", action="store_true", help="Judge v2 迭代：重评 live 冻结答案（需 key + NO_PAID_API=false）"
@@ -340,7 +347,8 @@ def main() -> int:
         return rejudge_cmd()
     if args.calibrate:
         return calibrate_cmd(args.calibrate)
-    return run(mode="live" if args.live else "offline", force=args.force, kb_spec=args.kb_version)
+    return run(mode="live" if args.live else "offline", force=args.force, kb_spec=args.kb_version,
+               converted_version=args.converted_version)
 
 
 if __name__ == "__main__":

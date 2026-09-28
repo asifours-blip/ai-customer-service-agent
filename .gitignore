@@ -18,6 +18,7 @@ htmlcov/
 
 # --- 本地产物 ---
 eval/reports/generated/
+eval/datasets/converted/.versions.lock
 data/*.sqlite3
 models_cache/
 logs/
