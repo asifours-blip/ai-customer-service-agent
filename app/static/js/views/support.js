@@ -154,6 +154,93 @@ export async function renderSupportDetail(main, { params, isStale }) {
     }, 'support-reply');
   }
 
+  let reviewedCase = null;
+  try {
+    reviewedCase = await api(`/api/support/tickets/${encodeURIComponent(id)}/damage-case`);
+  } catch (err) {
+    clear(flash, notice('error', `案例状态读取失败：${err.message}`));
+  }
+  if (isStale()) return;
+
+  const damageKinds = [['OUTER_PACKAGE', '外包装破损'], ['PRODUCT', '商品破损'], ['BOTH', '包装与商品均破损']];
+  const reviewedPaths = [
+    ['REQUEST_EVIDENCE', '已要求补充破损证据'],
+    ['CARRIER_INVESTIGATION', '已核查物流责任'],
+    ['REPLACEMENT_REVIEW', '已人工评估补发或换货'],
+    ['REFUND_REVIEW', '已人工评估退款申请'],
+  ];
+  const damageKind = h('select', { 'aria-label': '当前破损类型', 'data-testid': 'damage-kind' },
+    damageKinds.map(([value, label]) => h('option', { value }, label)));
+  const caseResults = h('div', { 'data-testid': 'damage-case-results' });
+  const searchCases = h('button', {
+    class: 'btn', type: 'button', 'data-testid': 'search-damage-cases',
+    onclick: async (event) => {
+      event.target.disabled = true;
+      try {
+        const q = new URLSearchParams({ damage_kind: damageKind.value });
+        const found = await api(`/api/support/tickets/${encodeURIComponent(id)}/damage-cases?${q}`);
+        if (isStale()) return;
+        const draft = found.draft;
+        clear(caseResults,
+          h('p', { 'data-testid': 'damage-draft-status' }, `草案状态：${draft.status}`),
+          h('p', {}, `当前事实：${draft.current_facts.join('；')}`),
+          h('p', {}, `待补信息：${draft.missing_information.join('；')}`),
+          h('p', { 'data-testid': 'damage-next-step' }, draft.next_step),
+          h('p', { class: 'muted' }, draft.limitation),
+          found.cases.length ? h('ul', { 'data-testid': 'damage-case-list' }, found.cases.map((item) =>
+            h('li', {},
+              h('a', { href: detailHref(item.source_ticket_id) }, `历史工单 ${item.source_ticket_id}`),
+              ` · 经审核历史步骤：${item.reviewed_path_label} · 相似：${item.similarities.join('、')}`,
+              ` · 差异/待核：${item.differences.join('、') || '无'}`,
+              item.stale_policy ? ` · 旧规则 ${item.reviewed_policy_version}，不得作为现行授权` : '')))
+            : h('p', { class: 'muted' }, '没有可引用的已审核同类案例。'));
+      } catch (err) {
+        if (!isStale()) clear(caseResults, notice('error', `案例检索失败：${err.message}`));
+      } finally {
+        event.target.disabled = false;
+      }
+    },
+  }, '查找已审核案例并生成草案');
+  const caseActions = [];
+  if (reviewedCase && !reviewedCase.withdrawn_at) {
+    caseActions.push(h('p', { 'data-testid': 'reviewed-damage-case' },
+      `已审核破损案例：${reviewedCase.reviewed_path_label}（审核人 ${reviewedCase.approved_by}）`));
+    if (reviewedCase.approved_by === me) {
+      caseActions.push(h('button', { class: 'btn', type: 'button', 'data-testid': 'withdraw-damage-case',
+        onclick: (event) => act(event.target, () => api(`/api/support/tickets/${encodeURIComponent(id)}/damage-case/withdraw`, { method: 'POST' })),
+      }, '撤回案例'));
+    }
+  } else if (reviewedCase) {
+    caseActions.push(h('p', { class: 'muted' }, '该工单的历史案例已撤回，不会再被检索。'));
+  } else if (mine && ['RESOLVED', 'CLOSED'].includes(ticket.status)) {
+    const approvalKind = h('select', { 'aria-label': '历史破损类型', 'data-testid': 'approve-damage-kind' },
+      damageKinds.map(([value, label]) => h('option', { value }, label)));
+    const reviewedPath = h('select', { 'aria-label': '历史已核验处理步骤', 'data-testid': 'approve-reviewed-path' },
+      reviewedPaths.map(([value, label]) => h('option', { value }, label)));
+    const confirmed = h('input', { type: 'checkbox', 'data-testid': 'confirm-damage-case' });
+    caseActions.push(h('div', { class: 'toolbar' }, approvalKind, reviewedPath,
+      h('label', {}, confirmed, ' 我已核对源工单属于物流破损，所选处理步骤确实发生；不会复制客户原文'),
+      h('button', { class: 'btn', type: 'button', 'data-testid': 'approve-damage-case',
+        onclick: (event) => {
+          if (!confirmed.checked) {
+            clear(flash, notice('error', '请先核对并勾选历史工单确认。'));
+            return;
+          }
+          return act(event.target, () => api(`/api/support/tickets/${encodeURIComponent(id)}/damage-case`, {
+            method: 'POST', body: {
+              damage_kind: approvalKind.value, reviewed_path: reviewedPath.value,
+              confirmed_logistics_damage: true,
+            },
+          }));
+        },
+      }, '审核并发布历史案例')));
+  }
+  const caseSection = h('section', { class: 'panel', 'data-testid': 'damage-cases-panel' },
+    h('h2', {}, '物流破损案例参考（仅客服）'),
+    h('p', { class: 'muted' }, '仅参考人工审核的历史处理步骤；订单和现行政策优先，不会自动退款、发消息或改订单。'),
+    h('div', { class: 'toolbar' }, damageKind, searchCases), caseResults,
+    caseActions.length ? h('div', {}, caseActions) : null);
+
   const assignee = ticket.assignee_id ? (mine ? `我（${me}）` : ticket.assignee_id) : '未指派';
   clear(main, h('div', { class: 'page narrow', 'data-testid': 'ticket-detail', dataset: { ticketId: ticket.id } },
     h('p', {}, h('a', { href: '#/support/tickets' }, '← 工单队列')),
@@ -164,6 +251,7 @@ export async function renderSupportDetail(main, { params, isStale }) {
     actions.length ? h('div', { class: 'toolbar' }, actions) : null,
     flash,
     timeline(ticket, 'SUPPORT'),
+    caseSection,
     h('section', { class: 'panel' }, h('h2', {}, '回复客户'), replySection),
     h('section', { class: 'panel' }, h('h2', {}, '客户评价'),
       ticket.feedback ? feedbackView(ticket.feedback) : h('p', { class: 'muted' }, '暂无评价。'))));

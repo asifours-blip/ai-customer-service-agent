@@ -133,6 +133,59 @@ class TicketDetailOut(TicketOut):
     feedback: TicketFeedbackOut | None = None
 
 
+
+
+class DamageCaseApprove(BaseModel):
+    damage_kind: Literal["OUTER_PACKAGE", "PRODUCT", "BOTH"]
+    reviewed_path: Literal["REQUEST_EVIDENCE", "CARRIER_INVESTIGATION", "REPLACEMENT_REVIEW", "REFUND_REVIEW"]
+    confirmed_logistics_damage: Literal[True]
+
+
+class DamageCaseOut(BaseModel):
+    source_ticket_id: str
+    damage_kind: str
+    reviewed_path: str
+    reviewed_path_label: str
+    product_id: str
+    order_status: str
+    logistics_status: str | None
+    reviewed_policy_version: str
+    approved_by: str
+    approved_at: datetime
+    withdrawn_by: str | None
+    withdrawn_at: datetime | None
+
+
+class SimilarDamageCaseOut(BaseModel):
+    source_ticket_id: str
+    reviewed_path: str
+    reviewed_path_label: str
+    similarities: list[str]
+    differences: list[str]
+    score: int
+    reviewed_policy_version: str
+    stale_policy: bool
+
+
+class DamageCaseDraft(BaseModel):
+    status: Literal["NO_CASES", "HISTORICAL_ONLY", "CASE_ASSISTED"]
+    current_facts: list[str]
+    missing_information: list[str]
+    cited_cases: list[SimilarDamageCaseOut]
+    next_step: str
+    limitation: str
+
+
+class DamageCaseSuggestionOut(BaseModel):
+    ticket_id: str
+    damage_kind: str
+    current_order_status: str
+    current_logistics_status: str | None
+    current_policy_version: str
+    cases: list[SimilarDamageCaseOut]
+    draft: DamageCaseDraft
+
+
 class SupportTicketDetailOut(SupportTicketOut):
     replies: list[TicketReplyOut] = []
     events: list[TicketEventOut] = []
