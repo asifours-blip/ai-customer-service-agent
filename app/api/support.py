@@ -16,6 +16,9 @@ from sqlalchemy.orm import Session
 from app.api.ticket_views import support_detail
 from app.models.user import User
 from app.schemas.api import (
+    DamageCaseApprove,
+    DamageCaseOut,
+    DamageCaseSuggestionOut,
     SupportFeedbackOut,
     SupportTicketDetailOut,
     SupportTicketOut,
@@ -24,6 +27,7 @@ from app.schemas.api import (
     TicketStatusPatch,
 )
 from app.security.dependencies import get_support_user
+from app.services import damage_cases
 from app.services import tickets as ticket_service
 from app.services.database import get_db
 
@@ -78,6 +82,48 @@ def add_reply(
 ) -> TicketReplyOut:
     return TicketReplyOut.model_validate(ticket_service.add_support_reply(db, ticket_id, support.id, body.content))
 
+
+
+
+@router.get("/tickets/{ticket_id}/damage-case", response_model=DamageCaseOut | None)
+def reviewed_damage_case(
+    ticket_id: str,
+    support: User = Depends(get_support_user),
+    db: Session = Depends(get_db),
+) -> DamageCaseOut | None:
+    row = damage_cases.get_case(db, ticket_id)
+    return DamageCaseOut.model_validate(row) if row is not None else None
+
+
+@router.post("/tickets/{ticket_id}/damage-case", response_model=DamageCaseOut)
+def approve_damage_case(
+    ticket_id: str,
+    body: DamageCaseApprove,
+    support: User = Depends(get_support_user),
+    db: Session = Depends(get_db),
+) -> DamageCaseOut:
+    return DamageCaseOut.model_validate(
+        damage_cases.approve_case(db, ticket_id, support.id, body.damage_kind, body.reviewed_path)
+    )
+
+
+@router.post("/tickets/{ticket_id}/damage-case/withdraw", response_model=DamageCaseOut)
+def withdraw_damage_case(
+    ticket_id: str,
+    support: User = Depends(get_support_user),
+    db: Session = Depends(get_db),
+) -> DamageCaseOut:
+    return DamageCaseOut.model_validate(damage_cases.withdraw_case(db, ticket_id, support.id))
+
+
+@router.get("/tickets/{ticket_id}/damage-cases", response_model=DamageCaseSuggestionOut)
+def find_damage_cases(
+    ticket_id: str,
+    damage_kind: str = Query(pattern="^(OUTER_PACKAGE|PRODUCT|BOTH)$"),
+    support: User = Depends(get_support_user),
+    db: Session = Depends(get_db),
+) -> DamageCaseSuggestionOut:
+    return DamageCaseSuggestionOut.model_validate(damage_cases.similar_cases(db, ticket_id, damage_kind))
 
 @router.get("/feedback", response_model=list[SupportFeedbackOut])
 def list_feedback(

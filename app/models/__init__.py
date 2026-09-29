@@ -2,6 +2,7 @@
 
 from app.models.base import Base
 from app.models.conversation import Conversation, Message
+from app.models.damage_case import DamageCase
 from app.models.feedback import AnswerFeedback, FeedbackReviewAudit
 from app.models.knowledge import KbAuditLog, KbChunk, KbDocument, KbVersion
 from app.models.logistics import Logistics
@@ -21,6 +22,7 @@ __all__ = [
     "TicketReply",
     "TicketEvent",
     "TicketFeedback",
+    "DamageCase",
     "Conversation",
     "Message",
     "AgentTrace",
