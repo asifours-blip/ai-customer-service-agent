@@ -39,7 +39,7 @@ def test_reviewed_damage_case_browser_flow(page: Page, app_url: str, db, tmp_pat
     page.get_by_test_id("approve-damage-kind").select_option("PRODUCT")
     page.get_by_test_id("approve-reviewed-path").select_option("REQUEST_EVIDENCE")
     page.get_by_test_id("approve-damage-case").click()
-    expect(page.get_by_role("alert")).to_contain_text("请先核对")
+    expect(page.get_by_role("alert").filter(has_text="请先核对")).to_contain_text("请先核对")
     page.get_by_test_id("confirm-damage-case").check()
     page.get_by_test_id("approve-damage-case").click()
     expect(page.get_by_test_id("reviewed-damage-case")).to_contain_text("已审核")
@@ -51,6 +51,7 @@ def test_reviewed_damage_case_browser_flow(page: Page, app_url: str, db, tmp_pat
     expect(page.get_by_test_id("damage-next-step")).to_contain_text("T90001")
     expect(page.get_by_test_id("damage-case-list")).to_contain_text("相似")
     expect(page.get_by_test_id("damage-case-list")).to_contain_text("差异/待核")
+    page.set_viewport_size({"width": 1280, "height": 1100})
     page.screenshot(path=str(screenshot), full_page=True)
 
     page.get_by_role("link", name="历史工单 T90001").click()
