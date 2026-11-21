@@ -108,7 +108,7 @@ class LocalBGEEmbedding:
         _apply_hf_env(settings)
         if find_spec("sentence_transformers") is None:
             raise EmbeddingUnavailableError(
-                "LocalBGEEmbedding 需要 [rag-local] 依赖组：pip install -e '.[rag-local]'"
+                "LocalBGEEmbedding 需要 [rag-local] 依赖组：uv sync --locked --extra rag-local"
             )
         source, local_only = model_name, _offline(settings)
         if settings.bge_model_path.strip():

@@ -111,16 +111,13 @@ docker compose up --build   # backend :8000 + postgres(pgvector)，entrypoint �
 
 ## 开发
 
+安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，在仓库根目录按 `uv.lock` 安装 Python 3.11 开发环境。普通开发只需要 `dev`，使用本地 BGE 时在同一条同步命令后加 `--extra rag-local`。
+
 ```bash
-python -m venv .venv
-# Linux/macOS
+uv sync --locked --python 3.11 --extra dev
+# Linux/macOS 使用下一行；Windows PowerShell 改用 .\.venv\Scripts\Activate.ps1
 source .venv/bin/activate
 
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-
-python -m pip install -e ".[dev]"              # CI 同款（无 torch）
-python -m pip install -e ".[dev,rag-local]"    # 需要本地 BGE 时
 python -m pytest -q -m "not integration and not live"   # 离线单测（秒级）
 docker compose up -d db && python -m pytest -q -m integration  # 真实 PG 集成
 python -m ruff check . && python -m mypy app eval
@@ -131,7 +128,7 @@ python -m ruff check . && python -m mypy app eval
 `tests_e2e/` 用 uvicorn 子进程启动真实应用、连真实 PostgreSQL 测试库，Playwright（Chromium）驱动页面。**每个用例都会清空并重建测试库数据**，所以必须同时设置 `DATABASE_URL` 与 `TEST_DATABASE_URL` 且指向同一个测试库，否则直接退出。
 
 ```bash
-python -m pip install -e ".[dev,e2e]"
+uv sync --locked --python 3.11 --extra dev --extra e2e
 python -m playwright install chromium          # 浏览器下载到用户缓存目录，不装系统级软件
 export DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/agent_cs_test
 export TEST_DATABASE_URL=$DATABASE_URL
